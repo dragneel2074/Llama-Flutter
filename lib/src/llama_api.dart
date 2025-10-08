@@ -98,6 +98,17 @@ class GenerateRequest {
     required this.temperature,
     required this.topP,
     required this.topK,
+    required this.minP,
+    required this.typicalP,
+    required this.repeatPenalty,
+    required this.frequencyPenalty,
+    required this.presencePenalty,
+    required this.repeatLastN,
+    required this.mirostat,
+    required this.mirostatTau,
+    required this.mirostatEta,
+    this.seed,
+    required this.penalizeNewline,
   });
 
   String prompt;
@@ -110,6 +121,28 @@ class GenerateRequest {
 
   int topK;
 
+  double minP;
+
+  double typicalP;
+
+  double repeatPenalty;
+
+  double frequencyPenalty;
+
+  double presencePenalty;
+
+  int repeatLastN;
+
+  int mirostat;
+
+  double mirostatTau;
+
+  double mirostatEta;
+
+  int? seed;
+
+  bool penalizeNewline;
+
   Object encode() {
     return <Object?>[
       prompt,
@@ -117,6 +150,17 @@ class GenerateRequest {
       temperature,
       topP,
       topK,
+      minP,
+      typicalP,
+      repeatPenalty,
+      frequencyPenalty,
+      presencePenalty,
+      repeatLastN,
+      mirostat,
+      mirostatTau,
+      mirostatEta,
+      seed,
+      penalizeNewline,
     ];
   }
 
@@ -128,6 +172,17 @@ class GenerateRequest {
       temperature: result[2]! as double,
       topP: result[3]! as double,
       topK: result[4]! as int,
+      minP: result[5]! as double,
+      typicalP: result[6]! as double,
+      repeatPenalty: result[7]! as double,
+      frequencyPenalty: result[8]! as double,
+      presencePenalty: result[9]! as double,
+      repeatLastN: result[10]! as int,
+      mirostat: result[11]! as int,
+      mirostatTau: result[12]! as double,
+      mirostatEta: result[13]! as double,
+      seed: result[14] as int?,
+      penalizeNewline: result[15]! as bool,
     );
   }
 }
@@ -141,6 +196,17 @@ class ChatRequest {
     required this.temperature,
     required this.topP,
     required this.topK,
+    required this.minP,
+    required this.typicalP,
+    required this.repeatPenalty,
+    required this.frequencyPenalty,
+    required this.presencePenalty,
+    required this.repeatLastN,
+    required this.mirostat,
+    required this.mirostatTau,
+    required this.mirostatEta,
+    this.seed,
+    required this.penalizeNewline,
   });
 
   List<ChatMessage> messages;
@@ -155,6 +221,28 @@ class ChatRequest {
 
   int topK;
 
+  double minP;
+
+  double typicalP;
+
+  double repeatPenalty;
+
+  double frequencyPenalty;
+
+  double presencePenalty;
+
+  int repeatLastN;
+
+  int mirostat;
+
+  double mirostatTau;
+
+  double mirostatEta;
+
+  int? seed;
+
+  bool penalizeNewline;
+
   Object encode() {
     return <Object?>[
       messages,
@@ -163,6 +251,17 @@ class ChatRequest {
       temperature,
       topP,
       topK,
+      minP,
+      typicalP,
+      repeatPenalty,
+      frequencyPenalty,
+      presencePenalty,
+      repeatLastN,
+      mirostat,
+      mirostatTau,
+      mirostatEta,
+      seed,
+      penalizeNewline,
     ];
   }
 
@@ -175,6 +274,17 @@ class ChatRequest {
       temperature: result[3]! as double,
       topP: result[4]! as double,
       topK: result[5]! as int,
+      minP: result[6]! as double,
+      typicalP: result[7]! as double,
+      repeatPenalty: result[8]! as double,
+      frequencyPenalty: result[9]! as double,
+      presencePenalty: result[10]! as double,
+      repeatLastN: result[11]! as int,
+      mirostat: result[12]! as int,
+      mirostatTau: result[13]! as double,
+      mirostatEta: result[14]! as double,
+      seed: result[15] as int?,
+      penalizeNewline: result[16]! as bool,
     );
   }
 }

@@ -91,7 +91,18 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi {
                     request.maxTokens,
                     request.temperature,
                     request.topP,
-                    request.topK
+                    request.topK,
+                    request.minP,
+                    request.typicalP,
+                    request.repeatPenalty,
+                    request.frequencyPenalty,
+                    request.presencePenalty,
+                    request.repeatLastN,
+                    request.mirostat,
+                    request.mirostatTau,
+                    request.mirostatEta,
+                    request.seed ?: -1L,  // Use -1 for random seed
+                    request.penalizeNewline
                 ) { token ->
                     if (!isStopping.get()) {
                         scope.launch {
@@ -184,7 +195,18 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi {
                     request.maxTokens.toLong(),
                     request.temperature.toDouble(),
                     request.topP.toDouble(),
-                    request.topK.toLong()
+                    request.topK.toLong(),
+                    request.minP.toDouble(),
+                    request.typicalP.toDouble(),
+                    request.repeatPenalty.toDouble(),
+                    request.frequencyPenalty.toDouble(),
+                    request.presencePenalty.toDouble(),
+                    request.repeatLastN.toLong(),
+                    request.mirostat.toLong(),
+                    request.mirostatTau.toDouble(),
+                    request.mirostatEta.toDouble(),
+                    request.seed ?: -1L,  // Use -1 for random seed
+                    request.penalizeNewline
                 ) { token ->
                     if (!isStopping.get()) {
                         scope.launch {
@@ -248,6 +270,17 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi {
         temperature: Double,
         topP: Double,
         topK: Long,
+        minP: Double,
+        typicalP: Double,
+        repeatPenalty: Double,
+        frequencyPenalty: Double,
+        presencePenalty: Double,
+        repeatLastN: Long,
+        mirostat: Long,
+        mirostatTau: Double,
+        mirostatEta: Double,
+        seed: Long,
+        penalizeNewline: Boolean,
         tokenCallback: (String) -> Unit
     )
 

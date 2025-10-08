@@ -12,8 +12,14 @@ Run GGUF models on Android with [llama.cpp](https://github.com/ggerganov/llama.c
 - **Android 15 Ready** - Full 16KB page size compliance
 - **Simple API** - Easy-to-use Dart interface with Pigeon type safety
 - **Token Streaming** - Real-time token generation with EventChannel
+- **🛑 Stop Generation** - Cancel text generation mid-process on Android devices
+- **18 Parameters** - Fine-grained control (temperature, penalties, mirostat, seed, etc.)
+- **7 Chat Templates** - ChatML, Llama-2, Alpaca, Vicuna, Phi, Gemma, Zephyr
 - **Latest llama.cpp** - Built on October 2025 llama.cpp (no patches needed)
 - **ARM64 Optimized** - NEON and dot product optimizations enabled
+- **18 Parameters** - Complete control: temperature, penalties, mirostat, seed, and more
+- **7 Chat Templates** - ChatML, Llama-2, Alpaca, Vicuna, Phi, Gemma, Zephyr
+- **Auto-Detection** - Chat templates detected from model filename
 
 ## Requirements
 
@@ -34,37 +40,89 @@ dependencies:
       ref: main
 \\\
 
-## Usage
+## Quick Start
+
+### Basic Usage
 
 \\\dart
 import 'package:llama_flutter_android/llama_flutter_android.dart';
 
-// Initialize
-final llama = LlamaFlutterAndroid();
+// Initialize controller
+final controller = LlamaController();
 
 // Load model
-await llama.loadModel(
+await controller.loadModel(
   modelPath: '/path/to/model.gguf',
   nThreads: 4,
   contextSize: 2048,
 );
 
 // Generate text with streaming
-llama.generate(
-  prompt: 'Hello, how are you?',
+StreamSubscription? subscription;
+subscription = controller.generate(
+  prompt: 'Write a story about a robot',
   maxTokens: 512,
   temperature: 0.7,
 ).listen(
   (token) => print(token),  // Print each token as it arrives
   onDone: () => print('Generation complete!'),
-  onError: (error) => print('Error: \'),
+  onError: (error) => print('Error: $error'),
 );
 
-// Stop generation
-await llama.stop();
+// 🛑 STOP generation mid-process (critical for UX!)
+await controller.stop();
+subscription?.cancel();
 
 // Clean up
-await llama.dispose();
+await controller.dispose();
+\\\
+
+### Chat Mode with Templates
+
+\\\dart
+// Chat with automatic template formatting
+controller.generateChat(
+  messages: [
+    ChatMessage(role: 'system', content: 'You are a helpful assistant'),
+    ChatMessage(role: 'user', content: 'Explain quantum computing'),
+  ],
+  template: 'chatml', // Auto-detected if null
+  temperature: 0.7,
+  maxTokens: 1000,
+).listen((token) => print(token));
+\\\
+
+### Advanced Parameters
+
+\\\dart
+// Fine-grained control over generation
+controller.generate(
+  prompt: 'Explain machine learning',
+  maxTokens: 1000,
+  
+  // Sampling
+  temperature: 0.8,      // Creativity (0.0-2.0)
+  topP: 0.9,             // Nucleus sampling
+  topK: 40,              // Top-K sampling
+  minP: 0.05,            // Minimum probability
+  
+  // Penalties (reduce repetition)
+  repeatPenalty: 1.2,    // Penalize repeated tokens
+  frequencyPenalty: 0.5, // Penalize frequent tokens
+  presencePenalty: 0.3,  // Penalize token presence
+  repeatLastN: 64,       // Penalty window size
+  
+  // Reproducibility
+  seed: 42,              // Fixed seed for same output
+  
+  // Mirostat (perplexity control)
+  mirostat: 2,           // 0=off, 1=v1, 2=v2
+  mirostatTau: 5.0,      // Target perplexity
+  mirostatEta: 0.1,      // Learning rate
+).listen((token) => print(token));
+
+// 🛑 Stop anytime!
+await controller.stop();
 \\\
 
 ## Why llama_flutter_android?

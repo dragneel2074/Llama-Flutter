@@ -40,9 +40,28 @@ class ChatMessage {
 class GenerateRequest {
   final String prompt;
   final int maxTokens;
+  
+  // Sampling parameters
   final double temperature;
   final double topP;
   final int topK;
+  final double minP;
+  final double typicalP;
+  
+  // Penalties
+  final double repeatPenalty;
+  final double frequencyPenalty;
+  final double presencePenalty;
+  final int repeatLastN;
+  
+  // Mirostat sampling
+  final int mirostat;
+  final double mirostatTau;
+  final double mirostatEta;
+  
+  // Other
+  final int? seed;
+  final bool penalizeNewline;
   
   GenerateRequest({
     required this.prompt,
@@ -50,6 +69,17 @@ class GenerateRequest {
     this.temperature = 0.7,
     this.topP = 0.9,
     this.topK = 40,
+    this.minP = 0.05,
+    this.typicalP = 1.0,
+    this.repeatPenalty = 1.1,
+    this.frequencyPenalty = 0.0,
+    this.presencePenalty = 0.0,
+    this.repeatLastN = 64,
+    this.mirostat = 0,
+    this.mirostatTau = 5.0,
+    this.mirostatEta = 0.1,
+    this.seed,
+    this.penalizeNewline = true,
   });
 }
 
@@ -58,9 +88,28 @@ class ChatRequest {
   final List<ChatMessage> messages;
   final String? template; // null = auto-detect from model
   final int maxTokens;
+  
+  // Sampling parameters
   final double temperature;
   final double topP;
   final int topK;
+  final double minP;
+  final double typicalP;
+  
+  // Penalties
+  final double repeatPenalty;
+  final double frequencyPenalty;
+  final double presencePenalty;
+  final int repeatLastN;
+  
+  // Mirostat sampling
+  final int mirostat;
+  final double mirostatTau;
+  final double mirostatEta;
+  
+  // Other
+  final int? seed;
+  final bool penalizeNewline;
   
   ChatRequest({
     required this.messages,
@@ -69,6 +118,17 @@ class ChatRequest {
     this.temperature = 0.7,
     this.topP = 0.9,
     this.topK = 40,
+    this.minP = 0.05,
+    this.typicalP = 1.0,
+    this.repeatPenalty = 1.1,
+    this.frequencyPenalty = 0.0,
+    this.presencePenalty = 0.0,
+    this.repeatLastN = 64,
+    this.mirostat = 0,
+    this.mirostatTau = 5.0,
+    this.mirostatEta = 0.1,
+    this.seed,
+    this.penalizeNewline = true,
   });
 }
 

@@ -11,6 +11,10 @@
 - Progress tracking for model loading
 - User-friendly `LlamaController` API
 - Example chat application
+- **Comprehensive chat template system** with 7 formats (ChatML, Llama-2, Alpaca, Vicuna, Phi, Gemma)
+- **Extended parameter support** - 18 generation parameters for fine-grained control
+- Complete parameter documentation (`PARAMETERS_GUIDE.md`)
+- Feature reference guide (`FEATURES.md`)
 
 ### Features
 - **Model Management**
@@ -21,9 +25,21 @@
 
 - **Text Generation**
   - Stream tokens in real-time
-  - Configurable temperature, top-p, top-k
+  - **18 configurable parameters:**
+    - Basic: maxTokens
+    - Sampling: temperature, topP, topK, minP, typicalP
+    - Penalties: repeatPenalty, frequencyPenalty, presencePenalty, repeatLastN, penalizeNewline
+    - Mirostat: mirostat (0/1/2), mirostatTau, mirostatEta
+    - Reproducibility: seed
   - Cancellation support
   - EOS detection
+
+- **Chat Template System**
+  - 7 supported templates: ChatML (Qwen/Llama-3), Llama-2, Alpaca, Vicuna, Phi, Gemma
+  - Auto-detection based on model filename
+  - Proper system prompt integration
+  - Multi-turn conversation support
+  - Extensible template architecture
 
 - **Platform Integration**
   - Foreground service with notification
@@ -33,13 +49,17 @@
 
 ### Fixed
 - **llama.cpp API Compatibility (Critical)**
-  - Updated `llama_new_context_with_model` → `llama_init_from_model`
-  - Updated tokenization to use `common_tokenize` helper
-  - Updated batch operations to use `common_batch_*` functions
-  - Updated sampling API to use `common_sampler_*` functions
-  - Updated vocab operations to use vocab pointer instead of model
-  - Updated token decoding to use buffer-based API
+  - Updated to October 2025 llama.cpp API
+  - Removed dependency on common library (simplified to raw llama.cpp API only)
+  - Fixed tokenization negative count issue (llama_tokenize returns -count when tokens=NULL)
+  - Manual batch operations instead of helper functions
+  - Comprehensive sampler chain implementation with penalties, mirostat, and standard samplers
   - Fixed 8 compilation errors caused by llama.cpp API changes
+  
+- **Chat Template Issues**
+  - Resolved ChatMessage redeclaration conflict (Pigeon vs custom class)
+  - Renamed internal class to TemplateChatMessage
+  - Fixed gibberish output by implementing proper chat formatting
 
 ### Technical Details
 - **Build System**

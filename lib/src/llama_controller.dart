@@ -49,6 +49,17 @@ class LlamaController implements LlamaFlutterApi {
     double temperature = 0.7,
     double topP = 0.9,
     int topK = 40,
+    double minP = 0.05,
+    double typicalP = 1.0,
+    double repeatPenalty = 1.1,
+    double frequencyPenalty = 0.0,
+    double presencePenalty = 0.0,
+    int repeatLastN = 64,
+    int mirostat = 0,
+    double mirostatTau = 5.0,
+    double mirostatEta = 0.1,
+    int? seed,
+    bool penalizeNewline = true,
   }) {
     if (_isGenerating) {
       throw StateError('Already generating');
@@ -63,6 +74,17 @@ class LlamaController implements LlamaFlutterApi {
       temperature: temperature,
       topP: topP,
       topK: topK,
+      minP: minP,
+      typicalP: typicalP,
+      repeatPenalty: repeatPenalty,
+      frequencyPenalty: frequencyPenalty,
+      presencePenalty: presencePenalty,
+      repeatLastN: repeatLastN,
+      mirostat: mirostat,
+      mirostatTau: mirostatTau,
+      mirostatEta: mirostatEta,
+      seed: seed,
+      penalizeNewline: penalizeNewline,
     ));
 
     return _tokenController.stream;
@@ -97,6 +119,17 @@ class LlamaController implements LlamaFlutterApi {
     double temperature = 0.7,
     double topP = 0.9,
     int topK = 40,
+    double minP = 0.05,
+    double typicalP = 1.0,
+    double repeatPenalty = 1.1,
+    double frequencyPenalty = 0.0,
+    double presencePenalty = 0.0,
+    int repeatLastN = 64,
+    int mirostat = 0,
+    double mirostatTau = 5.0,
+    double mirostatEta = 0.1,
+    int? seed,
+    bool penalizeNewline = true,
   }) {
     if (_isGenerating) {
       throw StateError('Already generating');
@@ -112,6 +145,17 @@ class LlamaController implements LlamaFlutterApi {
       temperature: temperature,
       topP: topP,
       topK: topK,
+      minP: minP,
+      typicalP: typicalP,
+      repeatPenalty: repeatPenalty,
+      frequencyPenalty: frequencyPenalty,
+      presencePenalty: presencePenalty,
+      repeatLastN: repeatLastN,
+      mirostat: mirostat,
+      mirostatTau: mirostatTau,
+      mirostatEta: mirostatEta,
+      seed: seed,
+      penalizeNewline: penalizeNewline,
     ));
 
     return _tokenController.stream;

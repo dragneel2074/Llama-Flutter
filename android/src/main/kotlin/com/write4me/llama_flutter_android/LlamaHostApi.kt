@@ -116,7 +116,18 @@ data class GenerateRequest (
   val maxTokens: Long,
   val temperature: Double,
   val topP: Double,
-  val topK: Long
+  val topK: Long,
+  val minP: Double,
+  val typicalP: Double,
+  val repeatPenalty: Double,
+  val frequencyPenalty: Double,
+  val presencePenalty: Double,
+  val repeatLastN: Long,
+  val mirostat: Long,
+  val mirostatTau: Double,
+  val mirostatEta: Double,
+  val seed: Long? = null,
+  val penalizeNewline: Boolean
 )
  {
   companion object {
@@ -126,7 +137,18 @@ data class GenerateRequest (
       val temperature = pigeonVar_list[2] as Double
       val topP = pigeonVar_list[3] as Double
       val topK = pigeonVar_list[4] as Long
-      return GenerateRequest(prompt, maxTokens, temperature, topP, topK)
+      val minP = pigeonVar_list[5] as Double
+      val typicalP = pigeonVar_list[6] as Double
+      val repeatPenalty = pigeonVar_list[7] as Double
+      val frequencyPenalty = pigeonVar_list[8] as Double
+      val presencePenalty = pigeonVar_list[9] as Double
+      val repeatLastN = pigeonVar_list[10] as Long
+      val mirostat = pigeonVar_list[11] as Long
+      val mirostatTau = pigeonVar_list[12] as Double
+      val mirostatEta = pigeonVar_list[13] as Double
+      val seed = pigeonVar_list[14] as Long?
+      val penalizeNewline = pigeonVar_list[15] as Boolean
+      return GenerateRequest(prompt, maxTokens, temperature, topP, topK, minP, typicalP, repeatPenalty, frequencyPenalty, presencePenalty, repeatLastN, mirostat, mirostatTau, mirostatEta, seed, penalizeNewline)
     }
   }
   fun toList(): List<Any?> {
@@ -136,6 +158,17 @@ data class GenerateRequest (
       temperature,
       topP,
       topK,
+      minP,
+      typicalP,
+      repeatPenalty,
+      frequencyPenalty,
+      presencePenalty,
+      repeatLastN,
+      mirostat,
+      mirostatTau,
+      mirostatEta,
+      seed,
+      penalizeNewline,
     )
   }
 }
@@ -151,7 +184,18 @@ data class ChatRequest (
   val maxTokens: Long,
   val temperature: Double,
   val topP: Double,
-  val topK: Long
+  val topK: Long,
+  val minP: Double,
+  val typicalP: Double,
+  val repeatPenalty: Double,
+  val frequencyPenalty: Double,
+  val presencePenalty: Double,
+  val repeatLastN: Long,
+  val mirostat: Long,
+  val mirostatTau: Double,
+  val mirostatEta: Double,
+  val seed: Long? = null,
+  val penalizeNewline: Boolean
 )
  {
   companion object {
@@ -162,7 +206,18 @@ data class ChatRequest (
       val temperature = pigeonVar_list[3] as Double
       val topP = pigeonVar_list[4] as Double
       val topK = pigeonVar_list[5] as Long
-      return ChatRequest(messages, template, maxTokens, temperature, topP, topK)
+      val minP = pigeonVar_list[6] as Double
+      val typicalP = pigeonVar_list[7] as Double
+      val repeatPenalty = pigeonVar_list[8] as Double
+      val frequencyPenalty = pigeonVar_list[9] as Double
+      val presencePenalty = pigeonVar_list[10] as Double
+      val repeatLastN = pigeonVar_list[11] as Long
+      val mirostat = pigeonVar_list[12] as Long
+      val mirostatTau = pigeonVar_list[13] as Double
+      val mirostatEta = pigeonVar_list[14] as Double
+      val seed = pigeonVar_list[15] as Long?
+      val penalizeNewline = pigeonVar_list[16] as Boolean
+      return ChatRequest(messages, template, maxTokens, temperature, topP, topK, minP, typicalP, repeatPenalty, frequencyPenalty, presencePenalty, repeatLastN, mirostat, mirostatTau, mirostatEta, seed, penalizeNewline)
     }
   }
   fun toList(): List<Any?> {
@@ -173,6 +228,17 @@ data class ChatRequest (
       temperature,
       topP,
       topK,
+      minP,
+      typicalP,
+      repeatPenalty,
+      frequencyPenalty,
+      presencePenalty,
+      repeatLastN,
+      mirostat,
+      mirostatTau,
+      mirostatEta,
+      seed,
+      penalizeNewline,
     )
   }
 }
