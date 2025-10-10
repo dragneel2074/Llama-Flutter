@@ -307,7 +307,13 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _showSettingsDialog() {
+    // Get current settings
     final config = _chatService.generationConfig;
+    final contextSize = _chatService.contextSize;
+    final chatTemplate = _chatService.chatTemplate;
+    final autoUnloadModel = _chatService.autoUnloadModel;
+    final autoUnloadTimeout = _chatService.autoUnloadTimeout;
+    final systemMessage = _chatService.settingsService.systemMessage; // Access from chat service
     
     // Controllers for text fields
     final maxTokensController = TextEditingController(text: config.maxTokens.toString());
@@ -315,16 +321,25 @@ class _ChatScreenState extends State<ChatScreen> {
     final topPController = TextEditingController(text: config.topP.toString());
     final topKController = TextEditingController(text: config.topK.toString());
     final repeatPenaltyController = TextEditingController(text: config.repeatPenalty.toString());
+    final contextSizeController = TextEditingController(text: contextSize.toString());
+    final autoUnloadTimeoutController = TextEditingController(text: autoUnloadTimeout.toString());
+    final systemMessageController = TextEditingController(text: systemMessage);
+    
+    // Template selection
+    String selectedTemplate = chatTemplate;
+    bool autoUnloadEnabled = autoUnloadModel;
     
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Generation Settings'),
+        title: const Text('App Settings'),
         content: SingleChildScrollView(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              const Text('Generation Settings', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
               _buildSettingField('Max Tokens', maxTokensController, 'e.g., 150, 512'),
               const SizedBox(height: 12),
               _buildSettingField('Temperature', temperatureController, '0.0-2.0 (0.7 default)'),
@@ -334,6 +349,78 @@ class _ChatScreenState extends State<ChatScreen> {
               _buildSettingField('Top-K', topKController, 'e.g., 40'),
               const SizedBox(height: 12),
               _buildSettingField('Repeat Penalty', repeatPenaltyController, '1.0-2.0 (1.1 default)'),
+              const SizedBox(height: 16),
+              const Text('Model Settings', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              _buildSettingField('Context Size (tokens)', contextSizeController, '128-8192 (default: 2048)'),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text('Chat Template', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Container(
+                width: double.infinity,
+                child: DropdownButtonFormField<String>(
+                  isExpanded: true,
+                  initialValue: selectedTemplate,
+                  decoration: InputDecoration(
+                    contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                    isDense: true,
+                  ),
+                  items: [
+                    DropdownMenuItem(value: 'auto', child: Text('Auto-Detect')),
+                    DropdownMenuItem(value: 'chatml', child: Text('ChatML (Qwen, OpenChat)')),
+                    DropdownMenuItem(value: 'llama3', child: Text('Llama 3')),
+                    DropdownMenuItem(value: 'llama2', child: Text('Llama 2')),
+                    DropdownMenuItem(value: 'phi', child: Text('Phi-2/3')),
+                    DropdownMenuItem(value: 'gemma', child: Text('Gemma')),
+                    DropdownMenuItem(value: 'alpaca', child: Text('Alpaca')),
+                    DropdownMenuItem(value: 'vicuna', child: Text('Vicuna')),
+                  ],
+                  onChanged: (value) {
+                    if (value != null) {
+                      selectedTemplate = value;
+                    }
+                  },
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Checkbox(
+                    value: autoUnloadEnabled,
+                    onChanged: (value) {
+                      setState(() {
+                        autoUnloadEnabled = value ?? false;
+                      });
+                    },
+                  ),
+                  Expanded(
+                    child: Text('Auto-unload model when inactive'),
+                  ),
+                ],
+              ),
+              if (autoUnloadEnabled) ...[
+                const SizedBox(height: 8),
+                _buildSettingField('Auto-unload timeout (seconds)', autoUnloadTimeoutController, 'Minimum: 10 seconds'),
+              ],
+              const SizedBox(height: 16),
+              const Text('System Message', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              TextField(
+                controller: systemMessageController,
+                decoration: InputDecoration(
+                  hintText: 'Enter the system message for the AI',
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                ),
+                maxLines: 4,
+              ),
             ],
           ),
         ),
@@ -343,7 +430,25 @@ class _ChatScreenState extends State<ChatScreen> {
             child: const Text('Cancel'),
           ),
           TextButton(
-            onPressed: () {
+            onPressed: () async {
+              // Validate and parse context size
+              int parsedContextSize = int.tryParse(contextSizeController.text) ?? 2048;
+              parsedContextSize = parsedContextSize.clamp(128, 8192);
+              
+              // Validate and parse timeout
+              int parsedTimeout = int.tryParse(autoUnloadTimeoutController.text) ?? 60;
+              parsedTimeout = parsedTimeout.clamp(10, 3600); // Max 1 hour
+              
+              // Update chat service settings
+              await _chatService.updateContextSize(parsedContextSize);
+              await _chatService.updateChatTemplate(selectedTemplate);
+              await _chatService.updateAutoUnloadModel(autoUnloadEnabled);
+              await _chatService.updateAutoUnloadTimeout(parsedTimeout);
+              
+              // Update system message
+              await _chatService.updateSystemMessage(systemMessageController.text);
+              
+              // Update generation config
               setState(() {
                 _chatService.generationConfig = GenerationConfig(
                   maxTokens: int.tryParse(maxTokensController.text) ?? 150,
@@ -353,7 +458,11 @@ class _ChatScreenState extends State<ChatScreen> {
                   repeatPenalty: double.tryParse(repeatPenaltyController.text) ?? 1.1,
                 );
               });
-              Navigator.pop(context);
+              
+              // Check if context is still valid before navigating
+              if (context.mounted) {
+                Navigator.pop(context);
+              }
             },
             child: const Text('Apply'),
           ),
@@ -520,7 +629,7 @@ class _ChatScreenState extends State<ChatScreen> {
         return Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
+            color: color.withValues(alpha: 0.1),
             border: Border(
               bottom: BorderSide(color: Colors.grey[200]!),
             ),
@@ -568,7 +677,7 @@ class _ChatScreenState extends State<ChatScreen> {
             Container(
               padding: const EdgeInsets.all(6),
               decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.2),
+                color: Colors.white.withValues(alpha: 0.2),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: const Icon(Icons.chat_bubble, size: 20),
@@ -799,7 +908,7 @@ class _ChatScreenState extends State<ChatScreen> {
               color: Colors.white,
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
+                  color: Colors.black.withValues(alpha: 0.05),
                   blurRadius: 10,
                   offset: const Offset(0, -2),
                 ),
@@ -890,7 +999,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.05),
+                    color: Colors.black.withValues(alpha: 0.05),
                     blurRadius: 5,
                     offset: const Offset(0, 2),
                   ),
