@@ -26,7 +26,7 @@ The plugin includes a complete example chat application that demonstrates how to
 - **Advanced Parameters** - Full control over model parameters including Temperature Control, Top-P, Top-K, and more
 - **Auto Unload Model** - Automatic model unloading when inactivity is detected to preserve device resources
 
-An APK of the example app is available in the [example-app](example-app/) folder for immediate testing.
+An APK of the example app is available in the [example-app](https://github.com/dragneel2074/Llama-Flutter/tree/master/example-app) Github for immediate testing.
 
 
 ### Screenshots
