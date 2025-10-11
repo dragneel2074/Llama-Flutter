@@ -28,9 +28,12 @@ The plugin includes a complete example chat application that demonstrates how to
 
 ### Screenshots
 
-![Home Screen](images/home.jpeg)
-![App Settings](images/app_settings.jpeg)
-![App Settings 1](images/app_settings1.jpeg)
+<div align="center">
+
+![Home Screen](images/home.jpeg) | ![App Settings](images/app_settings.jpeg) | ![App Settings 1](images/app_settings1.jpeg)
+:---:|:---:|:---:
+
+</div>
 
 ## Requirements
 
