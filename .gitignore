@@ -73,9 +73,18 @@ android/local.properties
 # Example app - development notes and temporary files
 example/*.txt
 example/CHAT_TEMPLATE_INTEGRATION.md
+example/CHAT_TEMPLATES.md
 example/CONTEXT_AWARE_CHAT.md
 example/LOADING_LOCAL_MODEL.md
 example/UI_IMPROVEMENTS.md
 
 # Development documentation and notes
 docs/
+
+# Root development notes (keep only README, LICENSE, CHANGELOG, CONTRIBUTING)
+CHANGELOG_FLLAMA_INTEGRATION.md
+CONTEXT_AUTO_CLEAR_FIX.md
+FLLAMA_COMPARISON.md
+SIMPLE_CONTEXT_COMPLETE.md
+SIMPLE_FINAL.md
+logs/
