@@ -17,6 +17,21 @@ Run GGUF models on Android with [llama.cpp](https://github.com/ggerganov/llama.c
 - **Latest llama.cpp** - Built on October 2025 llama.cpp (no patches needed)
 - **ARM64 Optimized** - NEON and dot product optimizations enabled
 
+## Local Chat App
+
+The plugin includes a complete example chat application that demonstrates how to integrate the plugin into a real application. The example app showcases:
+
+- **Load Model from Local Storage** - Select and load GGUF models directly from your device storage
+- **Context Size Real Time Update** - Monitor and adjust context usage in real-time with visual indicators
+- **Advanced Parameters** - Full control over model parameters including Temperature Control, Top-P, Top-K, and more
+- **Auto Unload Model** - Automatic model unloading when inactivity is detected to preserve device resources
+
+### Screenshots
+
+![Home Screen](images/home.jpeg)
+![App Settings](images/app_settings.jpeg)
+![App Settings 1](images/app_settings1.jpeg)
+
 ## Requirements
 
 - Flutter 3.24.0+

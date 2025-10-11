@@ -139,45 +139,12 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _downloadModel() async {
-    debugPrint('[UI] ===== Download model triggered =====');
+    // Download functionality is disabled
+    debugPrint('[UI] Download model triggered but is disabled');
     
     setState(() {
-      _isLoading = true;
-      _statusMessage = 'Starting download...';
+      _statusMessage = 'Download functionality is disabled. Use "Load from Local" to select your model file.';
     });
-
-    try {
-      debugPrint('[UI] Calling chatService.downloadModel()...');
-      await _chatService.downloadModel(
-        onProgress: (progress) {
-          debugPrint('[UI] Download progress: ${progress.toStringAsFixed(1)}%');
-          setState(() {
-            _downloadProgress = progress;
-          });
-        },
-        onStatus: (status) {
-          debugPrint('[UI] Download status: $status');
-          setState(() {
-            _statusMessage = status;
-          });
-        },
-      );
-
-      debugPrint('[UI] ✓ Download complete, loading model...');
-      // Model downloaded, now load it
-      _loadModel();
-    } catch (e) {
-      debugPrint('[UI] ✗✗✗ Download failed: $e');
-      debugPrint('[UI] Stack trace: ${StackTrace.current}');
-      setState(() {
-        _statusMessage = 'Download failed: $e';
-      });
-    } finally {
-      setState(() {
-        _isLoading = false;
-      });
-      debugPrint('[UI] ===== Download model complete =====');
-    }
   }
 
   Future<void> _loadFromLocal() async {
@@ -1208,12 +1175,11 @@ class _ChatScreenState extends State<ChatScreen> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: ElevatedButton.icon(
-                          onPressed: !_chatService.hasModelPath && !_isLoading 
-                              ? _downloadModel 
-                              : null,
-                          icon: const Icon(Icons.download, size: 18),
-                          label: const Text('Download', style: TextStyle(fontSize: 13)),
+                          onPressed: null, // Download button disabled
+                          icon: Icon(Icons.download, size: 18, color: Colors.grey),
+                          label: Text('Download (Disabled)', style: TextStyle(fontSize: 13, color: Colors.grey)),
                           style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.grey[200],
                             padding: const EdgeInsets.symmetric(vertical: 12),
                           ),
                         ),

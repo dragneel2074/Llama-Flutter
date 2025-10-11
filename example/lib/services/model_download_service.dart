@@ -137,37 +137,9 @@ class ModelDownloadService {
     required void Function(double progress) onProgress,
     required void Function(String status) onStatus,
   }) async {
-    onStatus('Starting download...');
-    
-    final modelFile = File('${_modelDirectory.path}/$modelFileName');
-    _modelPath = modelFile.path;
-    
-    try {
-      final response = await Dio().get(
-        qwenModelUrl,
-        options: Options(
-          responseType: ResponseType.bytes,
-          followRedirects: false,
-          validateStatus: (status) => status == null || status < 500,
-        ),
-        onReceiveProgress: (received, total) {
-          if (total != -1) {
-            final progress = (received / total) * 100;
-            onProgress(progress);
-            onStatus('Downloading... ${(progress).toStringAsFixed(1)}%');
-          }
-        },
-      );
-      
-      // Write the downloaded bytes to the file
-      await modelFile.writeAsBytes(response.data);
-      onStatus('Download completed!');
-      
-      return 100.0;
-    } catch (e) {
-      onStatus('Download failed: $e');
-      rethrow;
-    }
+    // Download functionality is disabled
+    onStatus('Download functionality is disabled. Use "Load from Local" to select your model file.');
+    throw Exception('Download functionality is disabled');
   }
   
   Future<bool> checkModelExists() async {
