@@ -189,6 +189,6 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Support
 
--  [Issue Tracker](https://github.com/dragneel2074/Llama-Flutter/issues)
+- [Issue Tracker](https://github.com/dragneel2074/Llama-Flutter/issues)
 - 💬 [Discussions](https://github.com/dragneel2074/Llama-Flutter/discussions)
-- 📦 [Example App](example/) - Complete working example 
+- 📦 [Example App](example/) - Complete working example
