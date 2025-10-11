@@ -36,12 +36,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   
   # Local plugin for running GGUF models on Android
-  # llama_flutter_android:
-  #   path: ../
-  Llama-Flutter:
-    git:
-      url: https://github.com/dragneel2074/Llama-Flutter.git
-      ref: master
+  llama_flutter_android:
+    path: ../
     
   # For downloading models from Hugging Face
   dio: ^5.7.0
