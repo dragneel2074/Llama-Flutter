@@ -316,18 +316,25 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _showCustomTemplateEditor(BuildContext context) async {
-    final nameController = TextEditingController();
-    final contentController = TextEditingController();
+  void _showCustomTemplateEditor(BuildContext context, {String? existingName, String? existingContent}) async {
+    final isEditing = existingName != null;
+    final nameController = TextEditingController(text: existingName ?? '');
+    final contentController = TextEditingController(text: existingContent ?? '');
     
     await showDialog(
       context: context,
       builder: (context) => AlertDialog(
         title: Row(
           children: [
-            Icon(Icons.edit_note, color: Colors.blue[700]),
+            Icon(Icons.edit_note, color: Colors.blue[700], size: 20),
             const SizedBox(width: 8),
-            const Text('Create Custom Template'),
+            Expanded(
+              child: Text(
+                isEditing ? 'Edit Template' : 'Create Template',
+                style: TextStyle(fontSize: 18),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
           ],
         ),
         content: SingleChildScrollView(
@@ -345,11 +352,14 @@ class _ChatScreenState extends State<ChatScreen> {
               const SizedBox(height: 8),
               TextField(
                 controller: nameController,
+                enabled: !isEditing, // Readonly when editing
                 decoration: InputDecoration(
                   hintText: 'e.g., mistral-custom',
                   prefixIcon: Icon(Icons.label, size: 20),
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
                   contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                  filled: isEditing,
+                  fillColor: isEditing ? Colors.grey[200] : null,
                 ),
               ),
               const SizedBox(height: 16),
@@ -433,15 +443,24 @@ class _ChatScreenState extends State<ChatScreen> {
               final content = contentController.text.trim();
               
               if (name.isNotEmpty && content.isNotEmpty) {
+                // If editing, remove old one first if name changed (though we disabled name editing)
+                if (isEditing && existingName != name) {
+                  await _chatService.removeCustomTemplate(existingName);
+                }
+                
                 await _chatService.addCustomTemplate(name, content);
                 
                 if (context.mounted) {
                   Navigator.pop(context); // Close editor
+                  _showSettingsDialog(); // Reopen settings to show updated list
                   
                   // Show success message
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
-                      content: Text('Custom template "$name" created'),
+                      content: Text(isEditing 
+                        ? 'Template "$name" updated' 
+                        : 'Template "$name" created'
+                      ),
                       backgroundColor: Colors.green,
                       duration: Duration(seconds: 2),
                     ),
@@ -460,7 +479,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 }
               }
             },
-            child: const Text('Create'),
+            child: Text(isEditing ? 'Update' : 'Create'),
           ),
         ],
       ),
@@ -564,17 +583,26 @@ class _ChatScreenState extends State<ChatScreen> {
                     isDense: true,
                   ),
                   items: [
+                    // Built-in templates with user-friendly names
                     DropdownMenuItem(value: 'auto', child: Text('Auto-Detect')),
                     DropdownMenuItem(value: 'chatml', child: Text('ChatML (Qwen, OpenChat)')),
                     DropdownMenuItem(value: 'llama3', child: Text('Llama 3')),
                     DropdownMenuItem(value: 'llama2', child: Text('Llama 2')),
                     DropdownMenuItem(value: 'phi', child: Text('Phi-2/3')),
-                    DropdownMenuItem(value: 'gemma', child: Text('Gemma')),
+                    DropdownMenuItem(value: 'gemma', child: Text('Gemma (default)')),
+                    DropdownMenuItem(value: 'gemma2', child: Text('Gemma 2')),
+                    DropdownMenuItem(value: 'gemma3', child: Text('Gemma 3')),
                     DropdownMenuItem(value: 'alpaca', child: Text('Alpaca')),
                     DropdownMenuItem(value: 'vicuna', child: Text('Vicuna')),
-                    // Add custom templates
+                    DropdownMenuItem(value: 'mistral', child: Text('Mistral')),
+                    DropdownMenuItem(value: 'mixtral', child: Text('Mixtral')),
+                    DropdownMenuItem(value: 'qwq', child: Text('QwQ (Thinking Model)')),
+                    DropdownMenuItem(value: 'deepseek-r1', child: Text('DeepSeek-R1')),
+                    DropdownMenuItem(value: 'deepseek-v3', child: Text('DeepSeek-V3')),
+                    DropdownMenuItem(value: 'deepseek-coder', child: Text('DeepSeek Coder')),
+                    // Custom templates
                     ..._chatService.customTemplateNames.map((template) => 
-                      DropdownMenuItem(value: template, child: Text(template))
+                      DropdownMenuItem(value: template, child: Text('$template (custom)'))
                     ),
                   ],
                   onChanged: (value) {
@@ -641,49 +669,82 @@ class _ChatScreenState extends State<ChatScreen> {
                         spacing: 8,
                         runSpacing: 8,
                         children: _chatService.customTemplateNames.map((templateName) {
-                          return Chip(
-                            label: Text(templateName, style: TextStyle(fontSize: 12)),
-                            deleteIcon: Icon(Icons.close, size: 16),
-                            onDeleted: () async {
-                              // Show confirmation dialog
-                              final confirmed = await showDialog<bool>(
-                                context: context,
-                                builder: (context) => AlertDialog(
-                                  title: Text('Delete Template?'),
-                                  content: Text('Are you sure you want to delete "$templateName"?'),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(context, false),
-                                      child: Text('Cancel'),
-                                    ),
-                                    TextButton(
-                                      onPressed: () => Navigator.pop(context, true),
-                                      child: Text('Delete', style: TextStyle(color: Colors.red)),
-                                    ),
-                                  ],
+                          return Container(
+                            decoration: BoxDecoration(
+                              color: Colors.blue[100],
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 12),
+                                  child: Icon(Icons.label, size: 14, color: Colors.blue[700]),
                                 ),
-                              );
-                              
-                              if (confirmed == true) {
-                                await _chatService.removeCustomTemplate(templateName);
-                                
-                                // Refresh the dialog
-                                if (context.mounted) {
-                                  Navigator.pop(context);
-                                  _showSettingsDialog();
-                                  
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    SnackBar(
-                                      content: Text('Template "$templateName" deleted'),
-                                      backgroundColor: Colors.orange,
-                                      duration: Duration(seconds: 2),
-                                    ),
-                                  );
-                                }
-                              }
-                            },
-                            backgroundColor: Colors.blue[100],
-                            deleteIconColor: Colors.red[700],
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                                  child: Text(templateName, style: TextStyle(fontSize: 12)),
+                                ),
+                                InkWell(
+                                  onTap: () {
+                                    // Edit template
+                                    final content = _chatService.settingsService.getCustomTemplateContent(templateName);
+                                    Navigator.pop(context); // Close settings
+                                    _showCustomTemplateEditor(context, existingName: templateName, existingContent: content);
+                                  },
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(6),
+                                    child: Icon(Icons.edit, size: 14, color: Colors.blue[700]),
+                                  ),
+                                ),
+                                InkWell(
+                                  onTap: () async {
+                                    // Show confirmation dialog
+                                    final confirmed = await showDialog<bool>(
+                                      context: context,
+                                      builder: (context) => AlertDialog(
+                                        title: Text('Delete Template?'),
+                                        content: Text('Are you sure you want to delete "$templateName"?'),
+                                        actions: [
+                                          TextButton(
+                                            onPressed: () => Navigator.pop(context, false),
+                                            child: Text('Cancel'),
+                                          ),
+                                          TextButton(
+                                            onPressed: () => Navigator.pop(context, true),
+                                            child: Text('Delete', style: TextStyle(color: Colors.red)),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                    
+                                    if (confirmed == true) {
+                                      await _chatService.removeCustomTemplate(templateName);
+                                      
+                                      // Refresh the dialog
+                                      if (context.mounted) {
+                                        Navigator.pop(context);
+                                        _showSettingsDialog();
+                                        
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(
+                                            content: Text('Template "$templateName" deleted'),
+                                            backgroundColor: Colors.orange,
+                                            duration: Duration(seconds: 2),
+                                          ),
+                                        );
+                                      }
+                                    }
+                                  },
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: Padding(
+                                    padding: const EdgeInsets.all(6),
+                                    child: Icon(Icons.close, size: 14, color: Colors.red[700]),
+                                  ),
+                                ),
+                              ],
+                            ),
                           );
                         }).toList(),
                       ),
