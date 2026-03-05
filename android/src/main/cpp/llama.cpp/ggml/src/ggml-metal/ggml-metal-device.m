@@ -1,11 +1,12 @@
 #import "ggml-metal-device.h"
 
 #import "ggml-impl.h"
-#import "ggml-threading.h"
 
 #include <Foundation/Foundation.h>
 
 #include <Metal/Metal.h>
+
+#include <stdatomic.h>
 
 #ifndef TARGET_OS_VISION
 #define TARGET_OS_VISION 0
@@ -19,8 +20,9 @@
 #define GGML_METAL_HAS_RESIDENCY_SETS 1
 #endif
 
-// overload of MTLGPUFamilyMetal3 (not available in some environments)
+// overload of MTLGPUFamilyMetalX (not available in some environments)
 static const NSInteger MTLGPUFamilyMetal3_GGML = 5001;
+static const NSInteger MTLGPUFamilyMetal4_GGML = 5002;
 
 #if !GGML_METAL_EMBED_LIBRARY
 // Here to assist with NSBundle Path Hack
@@ -69,14 +71,6 @@ void ggml_metal_cv_set_bool(ggml_metal_cv_t cv, bool value, int32_t idx) {
 
 struct ggml_metal_pipeline {
     id<MTLComputePipelineState> obj;
-
-    // suggested dispatch sizes
-    int nsg;
-
-    int nr0;
-    int nr1;
-
-    size_t smem;
 };
 
 ggml_metal_pipeline_t ggml_metal_pipeline_init(void) {
@@ -84,10 +78,6 @@ ggml_metal_pipeline_t ggml_metal_pipeline_init(void) {
 
     *res = (struct ggml_metal_pipeline) {
         /*.obj  =*/ nil,
-        /*.nsg  =*/ 0,
-        /*.nr0  =*/ 0,
-        /*.nr1  =*/ 0,
-        /*.smem =*/ 0,
     };
 
     return res;
@@ -99,40 +89,8 @@ void ggml_metal_pipeline_free(ggml_metal_pipeline_t pipeline) {
     free(pipeline);
 }
 
-void ggml_metal_pipeline_set_nsg(ggml_metal_pipeline_t pipeline, int nsg) {
-    pipeline->nsg = nsg;
-}
-
-int ggml_metal_pipeline_get_nsg(ggml_metal_pipeline_t pipeline) {
-    return pipeline->nsg;
-}
-
-void ggml_metal_pipeline_set_nr0(ggml_metal_pipeline_t pipeline, int nr0) {
-    pipeline->nr0 = nr0;
-}
-
-int ggml_metal_pipeline_get_nr0(ggml_metal_pipeline_t pipeline) {
-    return pipeline->nr0;
-}
-
-void ggml_metal_pipeline_set_nr1(ggml_metal_pipeline_t pipeline, int nr1) {
-    pipeline->nr1 = nr1;
-}
-
-int ggml_metal_pipeline_get_nr1(ggml_metal_pipeline_t pipeline) {
-    return pipeline->nr1;
-}
-
-void   ggml_metal_pipeline_set_smem(ggml_metal_pipeline_t pipeline, size_t smem) {
-    pipeline->smem = smem;
-}
-
-size_t ggml_metal_pipeline_get_smem(ggml_metal_pipeline_t pipeline) {
-    return pipeline->smem;
-}
-
-int ggml_metal_pipeline_max_theads_per_threadgroup(ggml_metal_pipeline_t pipeline) {
-    return pipeline->obj.maxTotalThreadsPerThreadgroup;
+int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_with_params pipeline) {
+    return pipeline.pipeline->obj.maxTotalThreadsPerThreadgroup;
 }
 
 struct ggml_metal_library {
@@ -140,6 +98,8 @@ struct ggml_metal_library {
     id<MTLDevice> device;
 
     ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
+
+    NSLock * lock;
 };
 
 ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
@@ -256,6 +216,10 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
                     [prep setObject:@"1" forKey:@"GGML_METAL_HAS_BF16"];
                 }
 
+                if (ggml_metal_device_get_props(dev)->has_tensor) {
+                    [prep setObject:@"1" forKey:@"GGML_METAL_HAS_TENSOR"];
+                }
+
 #if GGML_METAL_EMBED_LIBRARY
                 [prep setObject:@"1" forKey:@"GGML_METAL_EMBED_LIBRARY"];
 #endif
@@ -286,9 +250,77 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
 
     ggml_metal_library_t res = calloc(1, sizeof(struct ggml_metal_library));
 
-    res->obj = library;
-    res->device = device;
+    res->obj       = library;
+    res->device    = device;
     res->pipelines = ggml_metal_pipelines_init();
+    res->lock      = [NSLock new];
+
+    return res;
+}
+
+ggml_metal_library_t ggml_metal_library_init_from_source(ggml_metal_device_t dev, const char * source, bool verbose) {
+    if (source == NULL) {
+        GGML_LOG_ERROR("%s: source is NULL\n", __func__);
+        return NULL;
+    }
+
+    id<MTLDevice> device = ggml_metal_device_get_obj(dev);
+    id<MTLLibrary> library = nil;
+    NSError * error = nil;
+
+    const int64_t t_start = ggml_time_us();
+
+    NSString * src = [[NSString alloc] initWithBytes:source
+                                              length:strlen(source)
+                                            encoding:NSUTF8StringEncoding];
+    if (!src) {
+        GGML_LOG_ERROR("%s: failed to create NSString from source\n", __func__);
+        return NULL;
+    }
+
+    @autoreleasepool {
+        NSMutableDictionary * prep = [NSMutableDictionary dictionary];
+
+        MTLCompileOptions * options = [MTLCompileOptions new];
+        options.preprocessorMacros = prep;
+
+        library = [device newLibraryWithSource:src options:options error:&error];
+        if (error) {
+            if (verbose) {
+                GGML_LOG_ERROR("%s: error compiling source: %s\n", __func__, [[error description] UTF8String]);
+            } else {
+                GGML_LOG_ERROR("%s: error compiling source\n", __func__);
+            }
+            library = nil;
+        }
+
+        [options release];
+    }
+
+    [src release];
+
+    if (!library) {
+        if (verbose) {
+            GGML_LOG_ERROR("%s: failed to create Metal library from source\n", __func__);
+        }
+
+        return NULL;
+    }
+
+    if (verbose) {
+        GGML_LOG_INFO("%s: compiled in %.3f sec\n", __func__, (ggml_time_us() - t_start) / 1e6);
+    }
+
+    ggml_metal_library_t res = calloc(1, sizeof(struct ggml_metal_library));
+    if (!res) {
+        GGML_LOG_ERROR("%s: calloc failed\n", __func__);
+        return NULL;
+    }
+
+    res->obj       = library;
+    res->device    = device;
+    res->pipelines = ggml_metal_pipelines_init();
+    res->lock      = [NSLock new];
 
     return res;
 }
@@ -304,25 +336,50 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
 
     ggml_metal_pipelines_free(lib->pipelines);
 
+    [lib->lock release];
+
     free(lib);
 }
 
-ggml_metal_pipeline_t ggml_metal_library_get_pipeline(ggml_metal_library_t lib, const char * name) {
-    return ggml_metal_pipelines_get(lib->pipelines, name);
+struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline(ggml_metal_library_t lib, const char * name) {
+    [lib->lock lock];
+
+    struct ggml_metal_pipeline_with_params res = {
+        /*.pipeline =*/ nil,
+        /*.nsg      =*/ 0,
+        /*.nr0      =*/ 0,
+        /*.nr1      =*/ 0,
+        /*.smem     =*/ 0,
+        /*.c4       =*/ false,
+        /*.cnt      =*/ false,
+    };
+
+    res.pipeline = ggml_metal_pipelines_get(lib->pipelines, name);
+
+    [lib->lock unlock];
+
+    return res;
 }
 
-ggml_metal_pipeline_t ggml_metal_library_compile_pipeline(ggml_metal_library_t lib, const char * base, const char * name, ggml_metal_cv_t cv) {
-    // note: the pipelines are cached in the library per device, so they are shared across all metal contexts
-    ggml_critical_section_start();
+struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_metal_library_t lib, const char * base, const char * name, ggml_metal_cv_t cv) {
+    struct ggml_metal_pipeline_with_params res = {
+        /*.pipeline =*/ nil,
+        /*.nsg      =*/ 0,
+        /*.nr0      =*/ 0,
+        /*.nr1      =*/ 0,
+        /*.smem     =*/ 0,
+        /*.c4       =*/ false,
+        /*.cnt      =*/ false,
+    };
 
-    ggml_metal_pipeline_t res = ggml_metal_library_get_pipeline(lib, name);
-    if (res) {
-        ggml_critical_section_end();
+    [lib->lock lock];
+
+    res.pipeline = ggml_metal_pipelines_get(lib->pipelines, name);
+    if (res.pipeline) {
+        [lib->lock unlock];
 
         return res;
     }
-
-    res = ggml_metal_pipeline_init();
 
     @autoreleasepool {
         NSError * error = nil;
@@ -338,28 +395,53 @@ ggml_metal_pipeline_t ggml_metal_library_compile_pipeline(ggml_metal_library_t l
             mtl_function = [lib->obj newFunctionWithName:base_func constantValues:cv->obj error:&error];
         }
         if (!mtl_function) {
-            ggml_critical_section_end();
+            [lib->lock unlock];
 
-            GGML_LOG_ERROR("%s: error: failed to compile pipeline: base = '%s', name = '%s'\n", __func__, base, name);
+            GGML_LOG_ERROR("%s: failed to compile pipeline: base = '%s', name = '%s'\n", __func__, base, name);
             if (error) {
-                GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
+                GGML_LOG_ERROR("%s: %s\n", __func__, [[error description] UTF8String]);
             }
 
-            return nil;
+            return res;
         }
 
-        res->obj = [lib->device newComputePipelineStateWithFunction:mtl_function error:&error];
-
-        ggml_metal_pipelines_add(lib->pipelines, name, res);
+        id<MTLComputePipelineState> obj = [lib->device newComputePipelineStateWithFunction:mtl_function error:&error];
 
         [mtl_function release];
 
-        GGML_LOG_DEBUG("%s: loaded %-40s %16p | th_max = %4d | th_width = %4d\n", __func__, name, (void *) res->obj,
-                (int) res->obj.maxTotalThreadsPerThreadgroup,
-                (int) res->obj.threadExecutionWidth);
+        if (!obj) {
+            [lib->lock unlock];
+
+            GGML_LOG_ERROR("%s: failed to create pipeline state: base = '%s', name = '%s'\n", __func__, base, name);
+            if (error) {
+                GGML_LOG_ERROR("%s: %s\n", __func__, [[error description] UTF8String]);
+            }
+
+            return res;
+        }
+
+        GGML_LOG_DEBUG("%s: loaded %-40s %16p | th_max = %4d | th_width = %4d\n", __func__, name,
+                (void *) obj,
+                (int)    obj.maxTotalThreadsPerThreadgroup,
+                (int)    obj.threadExecutionWidth);
+
+        if (obj.maxTotalThreadsPerThreadgroup == 0 || obj.threadExecutionWidth == 0) {
+            [obj release];
+
+            [lib->lock unlock];
+
+            GGML_LOG_ERROR("%s: incompatible pipeline %s\n", __func__, name);
+
+            return res;
+        }
+
+        res.pipeline = ggml_metal_pipeline_init();
+        res.pipeline->obj = obj;
+
+        ggml_metal_pipelines_add(lib->pipelines, name, res.pipeline);
     }
 
-    ggml_critical_section_end();
+    [lib->lock unlock];
 
     return res;
 }
@@ -401,8 +483,8 @@ void ggml_metal_encoder_debug_group_pop (ggml_metal_encoder_t encoder) {
     [encoder->obj popDebugGroup];
 }
 
-void ggml_metal_encoder_set_pipeline(ggml_metal_encoder_t encoder, ggml_metal_pipeline_t pipeline) {
-    [encoder->obj setComputePipelineState:pipeline->obj];
+void ggml_metal_encoder_set_pipeline(ggml_metal_encoder_t encoder, struct ggml_metal_pipeline_with_params pipeline) {
+    [encoder->obj setComputePipelineState:pipeline.pipeline->obj];
 }
 
 void ggml_metal_encoder_set_bytes(ggml_metal_encoder_t encoder, void * data, size_t size, int idx) {
@@ -437,12 +519,110 @@ struct ggml_metal_device {
     // ref: https://github.com/ggml-org/llama.cpp/pull/15906
     id<MTLCommandQueue> mtl_queue;
 
+    ggml_metal_rsets_t rsets;
+
     ggml_metal_library_t library;
 
     struct ggml_metal_device_props props;
+
+    // virtual address for GPU memory allocations
+    atomic_uintptr_t addr_virt;
 };
 
-ggml_metal_device_t ggml_metal_device_init(void) {
+//
+// MTLResidenceSet wrapper
+//
+
+struct ggml_metal_rsets {
+    NSLock * lock;
+
+    NSMutableArray * data;
+
+    // number of seconds since the last graph computation
+    // keep the residency sets wired for that amount of time to avoid being collected by the OS
+    int keep_alive_s;
+
+    // background heartbeat thread to keep the residency sets alive
+    atomic_bool d_stop;
+    atomic_int  d_loop;
+
+    dispatch_group_t d_group;
+};
+
+ggml_metal_rsets_t ggml_metal_rsets_init(void) {
+    ggml_metal_rsets_t res = calloc(1, sizeof(struct ggml_metal_rsets));
+
+    res->lock = [[NSLock alloc] init];
+    res->data = [[NSMutableArray alloc] init];
+
+    // by default keep the memory wired for 3 minutes
+    res->keep_alive_s = 3*60;
+
+    const char * GGML_METAL_RESIDENCY_KEEP_ALIVE_S = getenv("GGML_METAL_RESIDENCY_KEEP_ALIVE_S");
+    if (GGML_METAL_RESIDENCY_KEEP_ALIVE_S) {
+        res->keep_alive_s = atoi(GGML_METAL_RESIDENCY_KEEP_ALIVE_S);
+    }
+
+    if (res->keep_alive_s <= 0) {
+        res->keep_alive_s = 3*60;
+    }
+
+    GGML_LOG_INFO("%s: creating a residency set collection (keep_alive = %d s)\n", __func__, res->keep_alive_s);
+
+    atomic_store_explicit(&res->d_stop, false, memory_order_relaxed);
+    atomic_store_explicit(&res->d_loop, 2*res->keep_alive_s, memory_order_relaxed);
+
+    res->d_group = dispatch_group_create();
+
+    // start a background thread that periodically requests residency for all the currently active sets in the collection
+    // the requests stop after a certain amount of time (keep_alive_s) of inactivity
+    dispatch_queue_t d_queue = dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0);
+    dispatch_group_async(res->d_group, d_queue, ^{
+#if defined(GGML_METAL_HAS_RESIDENCY_SETS)
+        if (@available(macOS 15.0, iOS 18.0, tvOS 18.0, visionOS 2.0, *)) {
+              while (!atomic_load_explicit(&res->d_stop, memory_order_relaxed)) {
+                  if (atomic_load_explicit(&res->d_loop, memory_order_relaxed) > 0) {
+                      [res->lock lock];
+
+                      for (int i = 0; i < (int) res->data.count; ++i) {
+                          [res->data[i] requestResidency];
+                      }
+
+                      atomic_fetch_sub_explicit(&res->d_loop, 1, memory_order_relaxed);
+
+                      [res->lock unlock];
+                  }
+
+                  // half a second
+                  usleep(500 * 1000);
+              }
+        }
+#endif
+    });
+
+    return res;
+}
+
+void ggml_metal_rsets_free(ggml_metal_rsets_t rsets) {
+    if (rsets == NULL) {
+        return;
+    }
+
+    // note: if you hit this assert, most likely you haven't deallocated all Metal resources before exiting
+    GGML_ASSERT([rsets->data count] == 0);
+
+    atomic_store_explicit(&rsets->d_stop, true, memory_order_relaxed);
+
+    dispatch_group_wait(rsets->d_group, DISPATCH_TIME_FOREVER);
+    dispatch_release(rsets->d_group);
+
+    [rsets->data release];
+    [rsets->lock release];
+
+    free(rsets);
+}
+
+ggml_metal_device_t ggml_metal_device_init(int device) {
     ggml_metal_device_t dev = calloc(1, sizeof(struct ggml_metal_device));
 
     assert(dev != NULL);
@@ -456,6 +636,9 @@ ggml_metal_device_t ggml_metal_device_init(void) {
                 GGML_LOG_ERROR("%s: error: failed to create command queue\n", __func__);
             }
 
+            dev->addr_virt = 0x000000400ULL;
+
+            dev->props.device = device;
             dev->props.has_simdgroup_reduction  = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
             dev->props.has_simdgroup_reduction |= [dev->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
 
@@ -464,6 +647,128 @@ ggml_metal_device_t ggml_metal_device_init(void) {
 
             dev->props.has_bfloat  = [dev->mtl_device supportsFamily:MTLGPUFamilyMetal3_GGML];
             dev->props.has_bfloat |= [dev->mtl_device supportsFamily:MTLGPUFamilyApple6];
+            if (getenv("GGML_METAL_BF16_DISABLE") != NULL) {
+                dev->props.has_bfloat = false;
+            }
+
+            dev->props.has_tensor = [dev->mtl_device supportsFamily:MTLGPUFamilyMetal4_GGML];
+            if (getenv("GGML_METAL_TENSOR_DISABLE") != NULL) {
+                dev->props.has_tensor = false;
+            }
+
+            // note: disable the tensor API by default for old chips because with the current implementation it is not useful
+            // - M2 Ultra:   ~5% slower
+            // - M4, M4 Max: no significant difference
+            //
+            // TODO: try to update the tensor API kernels to at least match the simdgroup performance
+            if (getenv("GGML_METAL_TENSOR_ENABLE") == NULL &&
+                ![[dev->mtl_device name] containsString:@"M5"] &&
+                ![[dev->mtl_device name] containsString:@"M6"] &&
+                ![[dev->mtl_device name] containsString:@"A19"] &&
+                ![[dev->mtl_device name] containsString:@"A20"]) {
+                GGML_LOG_WARN("%s: tensor API disabled for pre-M5 and pre-A19 devices\n", __func__);
+                dev->props.has_tensor = false;
+            }
+
+            // double-check that the tensor API compiles
+            if (dev->props.has_tensor) {
+                const char * src_tensor_f16 = "\n"
+                    "#include <metal_stdlib> \n"
+                    "#include <metal_tensor> \n"
+                    "#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h> \n"
+                    " \n"
+                    "using namespace metal; \n"
+                    "using namespace mpp::tensor_ops; \n"
+                    " \n"
+                    "kernel void dummy_kernel( \n"
+                    "    tensor<device  half, dextents<int32_t, 2>> A [[buffer(0)]], \n"
+                    "    tensor<device  half, dextents<int32_t, 2>> B [[buffer(1)]], \n"
+                    "    device float * C [[buffer(2)]], \n"
+                    "    uint2 tgid [[threadgroup_position_in_grid]]) \n"
+                    "{ \n"
+                    "    auto tA = A.slice(0, (int)tgid.y); \n"
+                    "    auto tB = B.slice((int)tgid.x, 0); \n"
+                    " \n"
+                    "    matmul2d< \n"
+                    "        matmul2d_descriptor(8, 8, dynamic_extent), \n"
+                    "        execution_simdgroups<4>> mm; \n"
+                    " \n"
+                    "    auto cT = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB), float>(); \n"
+                    " \n"
+                    "    auto sA = tA.slice(0, 0); \n"
+                    "    auto sB = tB.slice(0, 0); \n"
+                    "    mm.run(sB, sA, cT); \n"
+                    " \n"
+                    "    auto tC = tensor<device float, dextents<int32_t, 2>, tensor_inline>(C, dextents<int32_t, 2>(4, 4)); \n"
+                    " \n"
+                    "    cT.store(tC); \n"
+                    "}";
+
+                GGML_LOG_INFO("%s: testing tensor API for f16 support\n", __func__);
+                ggml_metal_library_t lib = ggml_metal_library_init_from_source(dev, src_tensor_f16, false);
+                if (lib == NULL) {
+                    GGML_LOG_WARN("%s: - the tensor API is not supported in this environment - disabling\n", __func__);
+                    dev->props.has_tensor = false;
+                } else {
+                    struct ggml_metal_pipeline_with_params ppl = ggml_metal_library_compile_pipeline(lib, "dummy_kernel", "dummy_kernel", nil);
+                    if (!ppl.pipeline) {
+                        GGML_LOG_WARN("%s: - the tensor API is not supported in this environment - disabling\n", __func__);
+                        dev->props.has_tensor = false;
+                    }
+
+                    ggml_metal_library_free(lib);
+                }
+            }
+
+            // try to compile a dummy kernel to determine if the tensor API is supported for bfloat
+            if (dev->props.has_tensor && dev->props.has_bfloat) {
+                const char * src_tensor_bf16 = "\n"
+                    "#include <metal_stdlib> \n"
+                    "#include <metal_tensor> \n"
+                    "#include <MetalPerformancePrimitives/MetalPerformancePrimitives.h> \n"
+                    " \n"
+                    "using namespace metal; \n"
+                    "using namespace mpp::tensor_ops; \n"
+                    " \n"
+                    "kernel void dummy_kernel( \n"
+                    "    tensor<device bfloat, dextents<int32_t, 2>> A [[buffer(0)]], \n"
+                    "    tensor<device bfloat, dextents<int32_t, 2>> B [[buffer(1)]], \n"
+                    "    device float * C [[buffer(2)]], \n"
+                    "    uint2 tgid [[threadgroup_position_in_grid]]) \n"
+                    "{ \n"
+                    "    auto tA = A.slice(0, (int)tgid.y); \n"
+                    "    auto tB = B.slice((int)tgid.x, 0); \n"
+                    " \n"
+                    "    matmul2d< \n"
+                    "        matmul2d_descriptor(8, 8, dynamic_extent), \n"
+                    "        execution_simdgroups<4>> mm; \n"
+                    " \n"
+                    "    auto cT = mm.get_destination_cooperative_tensor<decltype(tA), decltype(tB), float>(); \n"
+                    " \n"
+                    "    auto sA = tA.slice(0, 0); \n"
+                    "    auto sB = tB.slice(0, 0); \n"
+                    "    mm.run(sB, sA, cT); \n"
+                    " \n"
+                    "    auto tC = tensor<device float, dextents<int32_t, 2>, tensor_inline>(C, dextents<int32_t, 2>(4, 4)); \n"
+                    " \n"
+                    "    cT.store(tC); \n"
+                    "}";
+
+                GGML_LOG_INFO("%s: testing tensor API for bfloat support\n", __func__);
+                ggml_metal_library_t lib = ggml_metal_library_init_from_source(dev, src_tensor_bf16, false);
+                if (lib == NULL) {
+                    GGML_LOG_WARN("%s: - the tensor API does not support bfloat - disabling bfloat support\n", __func__);
+                    dev->props.has_bfloat = false;
+                } else {
+                    struct ggml_metal_pipeline_with_params ppl = ggml_metal_library_compile_pipeline(lib, "dummy_kernel", "dummy_kernel", nil);
+                    if (!ppl.pipeline) {
+                        GGML_LOG_WARN("%s: - the tensor API does not support bfloat - disabling bfloat support\n", __func__);
+                        dev->props.has_bfloat = false;
+                    }
+
+                    ggml_metal_library_free(lib);
+                }
+            }
 
             dev->props.use_residency_sets = true;
 #if defined(GGML_METAL_HAS_RESIDENCY_SETS)
@@ -471,25 +776,42 @@ ggml_metal_device_t ggml_metal_device_init(void) {
 #endif
 
             dev->props.use_shared_buffers = dev->props.has_unified_memory;
-
+#if TARGET_OS_OSX
+            // In case of eGPU, shared memory may be preferable.
+            dev->props.use_shared_buffers |= [dev->mtl_device location] == MTLDeviceLocationExternal;
+#endif
             if (getenv("GGML_METAL_SHARED_BUFFERS_DISABLE") != NULL) {
                 dev->props.use_shared_buffers = false;
+            }
+            if (getenv("GGML_METAL_SHARED_BUFFERS_ENABLE") != NULL) {
+                dev->props.use_shared_buffers = true;
             }
 
             dev->props.supports_gpu_family_apple7 = [dev->mtl_device supportsFamily:MTLGPUFamilyApple7];
 
-            dev->props.max_buffer_size            = dev->mtl_device.maxBufferLength;
-            dev->props.max_working_set_size       = dev->mtl_device.recommendedMaxWorkingSetSize;
-            dev->props.max_theadgroup_memory_size = dev->mtl_device.maxThreadgroupMemoryLength;
+            dev->props.op_offload_min_batch_size  = getenv("GGML_OP_OFFLOAD_MIN_BATCH") ? atoi(getenv("GGML_OP_OFFLOAD_MIN_BATCH")) : 32;
 
-            strncpy(dev->props.name, [[dev->mtl_device name] UTF8String], sizeof(dev->props.name) - 1);
+            dev->props.max_buffer_size            = dev->mtl_device.maxBufferLength;
+            dev->props.max_theadgroup_memory_size = dev->mtl_device.maxThreadgroupMemoryLength;
+            if (@available(macOS 10.12, iOS 16.0, *)) {
+                dev->props.max_working_set_size   = dev->mtl_device.recommendedMaxWorkingSetSize;
+            } else {
+                dev->props.max_working_set_size   = dev->mtl_device.maxBufferLength;
+            }
+
+            snprintf(dev->props.name, sizeof(dev->props.name), "%s%d", "MTL", device);
+            snprintf(dev->props.desc, sizeof(dev->props.desc), "%s", [[dev->mtl_device name] UTF8String]);
 
             dev->library = ggml_metal_library_init(dev);
             if (!dev->library) {
                 GGML_LOG_ERROR("%s: error: failed to create library\n", __func__);
             }
 
-            // --------------------------------------------------
+            if (dev->props.use_residency_sets) {
+                dev->rsets = ggml_metal_rsets_init();
+            } else {
+                dev->rsets = nil;
+            }
 
             // print MTL GPU family:
             GGML_LOG_INFO("%s: GPU name:   %s\n", __func__, dev->props.name);
@@ -524,6 +846,7 @@ ggml_metal_device_t ggml_metal_device_init(void) {
             GGML_LOG_INFO("%s: simdgroup matrix mul. = %s\n", __func__, dev->props.has_simdgroup_mm        ? "true" : "false");
             GGML_LOG_INFO("%s: has unified memory    = %s\n", __func__, dev->props.has_unified_memory      ? "true" : "false");
             GGML_LOG_INFO("%s: has bfloat            = %s\n", __func__, dev->props.has_bfloat              ? "true" : "false");
+            GGML_LOG_INFO("%s: has tensor            = %s\n", __func__, dev->props.has_tensor              ? "true" : "false");
             GGML_LOG_INFO("%s: use residency sets    = %s\n", __func__, dev->props.use_residency_sets      ? "true" : "false");
             GGML_LOG_INFO("%s: use shared buffers    = %s\n", __func__, dev->props.use_shared_buffers      ? "true" : "false");
 
@@ -540,6 +863,8 @@ ggml_metal_device_t ggml_metal_device_init(void) {
 
 void ggml_metal_device_free(ggml_metal_device_t dev) {
     assert(dev != NULL);
+
+    ggml_metal_rsets_free(dev->rsets);
 
     ggml_metal_library_free(dev->library);
     dev->library = NULL;
@@ -567,6 +892,95 @@ void * ggml_metal_device_get_queue(ggml_metal_device_t dev) {
 
 ggml_metal_library_t ggml_metal_device_get_library(ggml_metal_device_t dev) {
     return dev->library;
+}
+
+void ggml_metal_device_rsets_add(ggml_metal_device_t dev, ggml_metal_rset_t rset) {
+    if (rset == nil) {
+        return;
+    }
+
+    GGML_ASSERT(dev->rsets);
+
+    [dev->rsets->lock lock];
+
+    [dev->rsets->data addObject:rset];
+
+    [dev->rsets->lock unlock];
+}
+
+void ggml_metal_device_rsets_rm(ggml_metal_device_t dev, ggml_metal_rset_t rset) {
+    if (rset == nil) {
+        return;
+    }
+
+    GGML_ASSERT(dev->rsets);
+
+    [dev->rsets->lock lock];
+
+    [dev->rsets->data removeObject:rset];
+
+    [dev->rsets->lock unlock];
+}
+
+void ggml_metal_device_rsets_keep_alive(ggml_metal_device_t dev) {
+    if (dev->rsets == NULL) {
+        return;
+    }
+
+    atomic_store_explicit(&dev->rsets->d_loop, 2*dev->rsets->keep_alive_s, memory_order_relaxed);
+}
+
+struct ggml_metal_event {
+    void * obj; // id<MTLEvent>
+
+    atomic_int value;
+};
+
+void ggml_metal_event_encode_signal(ggml_metal_event_t ev, ggml_metal_cmd_buf_t cmd_buf_raw) {
+    id<MTLEvent> event = (id<MTLEvent>)ev->obj;
+
+    id<MTLCommandBuffer> cmd_buf = (id<MTLCommandBuffer>) cmd_buf_raw;
+
+    [cmd_buf encodeSignalEvent:event value:atomic_fetch_add_explicit(&ev->value, 1, memory_order_relaxed) + 1];
+}
+
+void ggml_metal_event_encode_wait(ggml_metal_event_t ev, ggml_metal_cmd_buf_t cmd_buf_raw) {
+    id<MTLEvent> event = (id<MTLEvent>)ev->obj;
+
+    id<MTLCommandBuffer> cmd_buf = (id<MTLCommandBuffer>) cmd_buf_raw;
+
+    [cmd_buf encodeWaitForEvent:event value:atomic_load_explicit(&ev->value, memory_order_relaxed)];
+}
+
+ggml_metal_event_t ggml_metal_device_event_init(ggml_metal_device_t dev) {
+    id<MTLEvent> event = [dev->mtl_device newEvent];
+
+    ggml_metal_event_t ev = calloc(1, sizeof(struct ggml_metal_event));
+
+    ev->obj = (__bridge void *)event;
+    ev->value = 0;
+
+    return ev;
+}
+
+void ggml_metal_device_event_free(ggml_metal_device_t dev, ggml_metal_event_t ev) {
+    id<MTLEvent> event = ev->obj;
+    [event release];
+
+    free(ev);
+
+    GGML_UNUSED(dev);
+}
+
+void ggml_metal_device_event_synchronize(ggml_metal_device_t dev, ggml_metal_event_t ev) {
+    @autoreleasepool {
+        id<MTLEvent> event = ev->obj;
+
+        id<MTLCommandBuffer> cmd_buf = [dev->mtl_queue commandBuffer];
+        [cmd_buf encodeWaitForEvent:event value:atomic_load_explicit(&ev->value, memory_order_relaxed)];
+        [cmd_buf commit];
+        [cmd_buf waitUntilCompleted];
+    }
 }
 
 void ggml_metal_device_get_memory(ggml_metal_device_t dev, size_t * free, size_t * total) {
@@ -597,6 +1011,15 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
     }
 
     switch (op->op) {
+        case GGML_OP_SCALE:
+        case GGML_OP_FILL:
+        case GGML_OP_CLAMP:
+        case GGML_OP_SQR:
+        case GGML_OP_SQRT:
+        case GGML_OP_SIN:
+        case GGML_OP_COS:
+        case GGML_OP_LOG:
+            return ggml_is_contiguous_rows(op->src[0]) && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16);
         case GGML_OP_UNARY:
             switch (ggml_get_unary_op(op)) {
                 case GGML_UNARY_OP_TANH:
@@ -614,7 +1037,9 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                 case GGML_UNARY_OP_HARDSWISH:
                 case GGML_UNARY_OP_HARDSIGMOID:
                 case GGML_UNARY_OP_EXP:
-                    return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
+                case GGML_UNARY_OP_SOFTPLUS:
+                case GGML_UNARY_OP_EXPM1:
+                    return ggml_is_contiguous_rows(op->src[0]) && (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16);
                 default:
                     return false;
             }
@@ -642,27 +1067,32 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_MUL:
         case GGML_OP_DIV:
         case GGML_OP_ADD_ID:
-            return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_ACC:
+            return ggml_is_contiguous_rows(op->src[0]) && ggml_is_contiguous_rows(op->src[1]) && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_REPEAT:
-        case GGML_OP_SCALE:
         case GGML_OP_CONV_TRANSPOSE_1D:
             return true;
-        case GGML_OP_CLAMP:
-            return op->src[0]->type == GGML_TYPE_F32;
-        case GGML_OP_SQR:
-        case GGML_OP_SQRT:
-        case GGML_OP_SIN:
-        case GGML_OP_COS:
-        case GGML_OP_LOG:
-            return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
+        case GGML_OP_CONV_TRANSPOSE_2D:
+            return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]) &&
+                (op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_F32) &&
+                op->src[1]->type == GGML_TYPE_F32 &&
+                op->type == GGML_TYPE_F32;
+        case GGML_OP_SUM:
+            return has_simdgroup_reduction && ggml_is_contiguous(op->src[0]);
+        case GGML_OP_TRI:
+            return ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_SUM_ROWS:
+        case GGML_OP_CUMSUM:
         case GGML_OP_MEAN:
         case GGML_OP_SOFT_MAX:
         case GGML_OP_GROUP_NORM:
-            return has_simdgroup_reduction && ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_L2_NORM:
-            return has_simdgroup_reduction && (op->ne[0] % 4 == 0 && ggml_is_contiguous_1(op->src[0]));
+            return has_simdgroup_reduction && ggml_is_contiguous_rows(op->src[0]);
+        case GGML_OP_COUNT_EQUAL:
+            return has_simdgroup_reduction &&
+                op->src[0]->type == GGML_TYPE_I32 &&
+                op->src[1]->type == GGML_TYPE_I32 &&
+                op->type == GGML_TYPE_I64;
         case GGML_OP_ARGMAX:
             return has_simdgroup_reduction;
         case GGML_OP_NORM:
@@ -672,13 +1102,23 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             return true;
         case GGML_OP_IM2COL:
             return ggml_is_contiguous(op->src[1]) && op->src[1]->type == GGML_TYPE_F32 && (op->type == GGML_TYPE_F16 || op->type == GGML_TYPE_F32);
-        case GGML_OP_POOL_1D:
-            return false;
+        case GGML_OP_CONV_2D:
+            return ggml_is_contiguous(op->src[0]) &&
+                   op->src[1]->type == GGML_TYPE_F32 &&
+                   op->type == GGML_TYPE_F32 &&
+                   (op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_F32);
         case GGML_OP_UPSCALE:
-            return op->src[0]->type == GGML_TYPE_F32 && op->op_params[0] == GGML_SCALE_MODE_NEAREST;
+            return op->src[0]->type == GGML_TYPE_F32 && op->op_params[0] == GGML_SCALE_MODE_NEAREST && !(op->op_params[0] & GGML_SCALE_FLAG_ANTIALIAS);
+        case GGML_OP_POOL_1D:
+            return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_POOL_2D:
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_PAD:
+            // TODO: add circular padding support for metal, see https://github.com/ggml-org/llama.cpp/pull/16985
+            if (ggml_get_op_params_i32(op, 8) != 0) {
+                return false;
+            }
+
             return (ggml_get_op_params_i32(op, 0) == 0) && (ggml_get_op_params_i32(op, 2) == 0) &&
                    (ggml_get_op_params_i32(op, 4) == 0) && (ggml_get_op_params_i32(op, 6) == 0);
         case GGML_OP_PAD_REFLECT_1D:
@@ -686,25 +1126,23 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_LEAKY_RELU:
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_ARGSORT:
-            // TODO: Support arbitrary column width
-            return op->src[0]->ne[0] <= 1024;
+        case GGML_OP_TOP_K:
         case GGML_OP_ARANGE:
             return true;
         case GGML_OP_FLASH_ATTN_EXT:
             // for new head sizes, add checks here
-            if (op->src[0]->ne[0] != 40 &&
+            if (op->src[0]->ne[0] != 32 &&
+                op->src[0]->ne[0] != 40 &&
+                op->src[0]->ne[0] != 48 &&
                 op->src[0]->ne[0] != 64 &&
+                op->src[0]->ne[0] != 72 &&
                 op->src[0]->ne[0] != 80 &&
                 op->src[0]->ne[0] != 96 &&
                 op->src[0]->ne[0] != 112 &&
                 op->src[0]->ne[0] != 128 &&
                 op->src[0]->ne[0] != 192 &&
-                op->src[0]->ne[0] != 256) {
-                return false;
-            }
-            if (op->src[0]->ne[0] == 576) {
-                // DeepSeek sizes
-                // TODO: disabled for now, until optmized
+                op->src[0]->ne[0] != 256 &&
+                op->src[0]->ne[0] != 576) {
                 return false;
             }
             if (op->src[1]->type != op->src[2]->type) {
@@ -717,9 +1155,11 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
         case GGML_OP_RWKV_WKV6:
         case GGML_OP_RWKV_WKV7:
             return true;
+        case GGML_OP_SOLVE_TRI:
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
             return has_simdgroup_reduction;
+        case GGML_OP_SET:
         case GGML_OP_CPY:
         case GGML_OP_DUP:
         case GGML_OP_CONT:
@@ -770,7 +1210,7 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                                 return false;
                         }
                     case GGML_TYPE_I32:
-                        return op->type == GGML_TYPE_F32;
+                        return op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_I32;
                     default:
                         return false;
                 };
@@ -798,6 +1238,11 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
                         return false;
                 };
             }
+        case GGML_OP_DIAG:
+            return true;
+        case GGML_OP_OPT_STEP_ADAMW:
+        case GGML_OP_OPT_STEP_SGD:
+            return has_simdgroup_reduction;
         default:
             return false;
     }
@@ -822,7 +1267,7 @@ struct ggml_metal_buffer_wrapper {
 };
 
 struct ggml_metal_buffer {
-    void * all_data; // TODO: https://github.com/ggml-org/llama.cpp/pull/15985
+    void * all_data;
     size_t all_size;
 
     // if false, the Metal buffer data is allocated in private GPU memory and is not shared with the host
@@ -839,9 +1284,8 @@ struct ggml_metal_buffer {
     // note: cannot use explicity "id<MTLResidencySet>" here because it is not available on certain OSes
     id rset;
 
-    // pointers to global device objects
-    id<MTLDevice> device;
-    id<MTLCommandQueue> queue;
+    // pointers to global device
+    ggml_metal_device_t dev;
 };
 
 static void ggml_metal_log_allocated_size(id<MTLDevice> device, size_t size_aligned) {
@@ -884,7 +1328,7 @@ static bool ggml_metal_buffer_rset_init(ggml_metal_buffer_t buf) {
         desc.initialCapacity = buf->n_buffers;
 
         NSError * error;
-        buf->rset = [buf->device newResidencySetWithDescriptor:desc error:&error];
+        buf->rset = [buf->dev->mtl_device newResidencySetWithDescriptor:desc error:&error];
         if (error) {
             GGML_LOG_ERROR("%s: error: %s\n", __func__, [[error description] UTF8String]);
             [desc release];
@@ -945,6 +1389,8 @@ static void * ggml_metal_host_malloc(size_t n) {
 ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t dev, size_t size, bool shared) {
     ggml_metal_buffer_t res = calloc(1, sizeof(struct ggml_metal_buffer));
 
+    res->dev = dev;
+
     const size_t size_page = sysconf(_SC_PAGESIZE);
 
     size_t size_aligned = size;
@@ -960,16 +1406,14 @@ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t dev, size_t size,
     if (shared) {
         res->all_data = ggml_metal_host_malloc(size_aligned);
         res->is_shared = true;
-        res->owned = true;
     } else {
-        // dummy, non-NULL value - we'll populate this after creating the Metal buffer below
-        res->all_data = (void *) 0x000000400ULL;
+        // use virtual address
+        res->all_data = (void *) atomic_fetch_add_explicit(&dev->addr_virt, size_aligned, memory_order_relaxed);
         res->is_shared = false;
     }
     res->all_size = size_aligned;
 
-    res->device = ggml_metal_device_get_obj(dev);
-    res->queue  = ggml_metal_device_get_queue(dev);
+    res->owned = true;
 
     res->n_buffers = 1;
 
@@ -978,15 +1422,13 @@ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t dev, size_t size,
         res->buffers[0].metal = nil;
 
         if (size_aligned > 0) {
-            if (props_dev->use_shared_buffers &&shared) {
-                res->buffers[0].metal = [res->device newBufferWithBytesNoCopy:res->all_data
+            if (props_dev->use_shared_buffers && shared) {
+                res->buffers[0].metal = [res->dev->mtl_device newBufferWithBytesNoCopy:res->all_data
                                                                   length:size_aligned
                                                                  options:MTLResourceStorageModeShared
                                                              deallocator:nil];
             } else {
-                res->buffers[0].metal = [res->device newBufferWithLength:size_aligned options:MTLResourceStorageModePrivate];
-
-                res->all_data = (void *) (res->buffers[0].metal.gpuAddress);
+                res->buffers[0].metal = [res->dev->mtl_device newBufferWithLength:size_aligned options:MTLResourceStorageModePrivate];
             }
         }
 
@@ -1007,6 +1449,8 @@ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t dev, size_t size,
         return NULL;
     }
 
+    ggml_metal_device_rsets_add(dev, res->rset);
+
     //ggml_metal_log_allocated_size(device, size_aligned);
 
     return res;
@@ -1014,6 +1458,8 @@ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t dev, size_t size,
 
 ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, size_t size, size_t max_tensor_size) {
     ggml_metal_buffer_t res = calloc(1, sizeof(struct ggml_metal_buffer));
+
+    res->dev = dev;
 
     res->all_data = ptr;
     res->all_size = size;
@@ -1037,9 +1483,6 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, s
         size_aligned += (size_page - (size_aligned % size_page));
     }
 
-    res->device = ggml_metal_device_get_obj(dev);
-    res->queue  = ggml_metal_device_get_queue(dev);
-
     const struct ggml_metal_device_props * props_dev = ggml_metal_device_get_props(dev);
 
     // the buffer fits into the max buffer size allowed by the device
@@ -1049,7 +1492,7 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, s
         res->buffers[res->n_buffers].metal = nil;
 
         if (size_aligned > 0) {
-            res->buffers[res->n_buffers].metal = [res->device newBufferWithBytesNoCopy:ptr length:size_aligned options:MTLResourceStorageModeShared deallocator:nil];
+            res->buffers[res->n_buffers].metal = [res->dev->mtl_device newBufferWithBytesNoCopy:ptr length:size_aligned options:MTLResourceStorageModeShared deallocator:nil];
 
             if (res->buffers[res->n_buffers].metal == nil) {
                 GGML_LOG_ERROR("%s: error: failed to allocate buffer, size = %8.2f MiB\n", __func__, size_aligned / 1024.0 / 1024.0);
@@ -1058,7 +1501,7 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, s
             }
         }
 
-        ggml_metal_log_allocated_size(res->device, size_aligned);
+        ggml_metal_log_allocated_size(res->dev->mtl_device, size_aligned);
 
         ++res->n_buffers;
     } else {
@@ -1076,7 +1519,7 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, s
             res->buffers[res->n_buffers].metal = nil;
 
             if (size_step_aligned > 0) {
-                res->buffers[res->n_buffers].metal = [res->device newBufferWithBytesNoCopy:(void *) ((uint8_t *) ptr + i) length:size_step_aligned options:MTLResourceStorageModeShared deallocator:nil];
+                res->buffers[res->n_buffers].metal = [res->dev->mtl_device newBufferWithBytesNoCopy:(void *) ((uint8_t *) ptr + i) length:size_step_aligned options:MTLResourceStorageModeShared deallocator:nil];
 
                 if (res->buffers[res->n_buffers].metal == nil) {
                     GGML_LOG_ERROR("%s: error: failed to allocate buffer, size = %8.2f MiB\n", __func__, size_step_aligned / 1024.0 / 1024.0);
@@ -1085,7 +1528,7 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, s
                 }
             }
 
-            ggml_metal_log_allocated_size(res->device, size_step_aligned);
+            ggml_metal_log_allocated_size(res->dev->mtl_device, size_step_aligned);
 
             if (i + size_step < size) {
                 GGML_LOG_INFO("\n");
@@ -1103,10 +1546,14 @@ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, s
         return NULL;
     }
 
+    ggml_metal_device_rsets_add(dev, res->rset);
+
     return res;
 }
 
 void ggml_metal_buffer_free(ggml_metal_buffer_t buf) {
+    ggml_metal_device_rsets_rm(buf->dev, buf->rset);
+
     for (int i = 0; i < buf->n_buffers; i++) {
         [buf->buffers[i].metal release];
     }
@@ -1134,7 +1581,7 @@ bool ggml_metal_buffer_is_shared(ggml_metal_buffer_t buf) {
 
 void ggml_metal_buffer_memset_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * tensor, uint8_t value, size_t offset, size_t size) {
     if (buf->is_shared) {
-        memset((char *)tensor->data + offset, value, size);
+        memset((char *) tensor->data + offset, value, size);
         return;
     }
 
@@ -1143,8 +1590,7 @@ void ggml_metal_buffer_memset_tensor(ggml_metal_buffer_t buf, struct ggml_tensor
         struct ggml_metal_buffer_id bid_dst = ggml_metal_buffer_get_id(buf, tensor);
         bid_dst.offs += offset;
 
-        id<MTLCommandQueue>  queue   = buf->queue;
-        id<MTLCommandBuffer> cmd_buf = [queue commandBufferWithUnretainedReferences];
+        id<MTLCommandBuffer> cmd_buf = [buf->dev->mtl_queue commandBufferWithUnretainedReferences];
 
         {
             id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
@@ -1163,14 +1609,14 @@ void ggml_metal_buffer_memset_tensor(ggml_metal_buffer_t buf, struct ggml_tensor
 
 void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
     if (buf->is_shared) {
-        memcpy((char *)tensor->data + offset, data, size);
+        memcpy((char *) tensor->data + offset, data, size);
         return;
     }
 
     @autoreleasepool {
         // src
         void * data_ptr = (void *)(uintptr_t) data; // "const cast" the src data
-        id<MTLBuffer> buf_src = [buf->device newBufferWithBytesNoCopy:data_ptr
+        id<MTLBuffer> buf_src = [buf->dev->mtl_device newBufferWithBytesNoCopy:data_ptr
                                                                length:size
                                                               options:MTLResourceStorageModeShared
                                                           deallocator:nil];
@@ -1185,8 +1631,7 @@ void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * 
         //       this is alternative to waitUntilCompleted, which should be faster, but don't seem to make much difference
         dispatch_semaphore_t completion_semaphore = dispatch_semaphore_create(0);
 
-        id<MTLCommandQueue>  queue   = buf->queue;
-        id<MTLCommandBuffer> cmd_buf = [queue commandBufferWithUnretainedReferences];
+        id<MTLCommandBuffer> cmd_buf = [buf->dev->mtl_queue commandBufferWithUnretainedReferences];
 
         {
             id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
@@ -1218,7 +1663,7 @@ void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t buf, struct ggml_tensor * 
 
 void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
     if (buf->is_shared) {
-        memcpy(data, (const char *)tensor->data + offset, size);
+        memcpy(data, (const char *) tensor->data + offset, size);
         return;
     }
 
@@ -1228,15 +1673,14 @@ void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_ten
         bid_src.offs += offset;
 
         // dst
-        id<MTLBuffer> buf_dst = [buf->device newBufferWithBytesNoCopy:data
+        id<MTLBuffer> buf_dst = [buf->dev->mtl_device newBufferWithBytesNoCopy:data
                                                                length:size
                                                               options:MTLResourceStorageModeShared
                                                           deallocator:nil];
 
         GGML_ASSERT(buf_dst);
 
-        id<MTLCommandQueue>  queue   = buf->queue;
-        id<MTLCommandBuffer> cmd_buf = [queue commandBufferWithUnretainedReferences];
+        id<MTLCommandBuffer> cmd_buf = [buf->dev->mtl_queue commandBufferWithUnretainedReferences];
 
         {
             id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];
@@ -1262,8 +1706,7 @@ void ggml_metal_buffer_clear(ggml_metal_buffer_t buf, uint8_t value) {
     }
 
     @autoreleasepool {
-        id<MTLCommandQueue>  queue   = buf->queue;
-        id<MTLCommandBuffer> cmd_buf = [queue commandBufferWithUnretainedReferences];
+        id<MTLCommandBuffer> cmd_buf = [buf->dev->mtl_queue commandBufferWithUnretainedReferences];
 
         {
             id<MTLBlitCommandEncoder> encoder = [cmd_buf blitCommandEncoder];

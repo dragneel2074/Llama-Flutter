@@ -18,7 +18,7 @@ RUN apt-get update && \
     python3 \
     python3-pip \
     git \
-    libcurl4-openssl-dev \
+    libssl-dev \
     libgomp1
 
 WORKDIR /app
@@ -32,7 +32,7 @@ RUN if [ "${MUSA_DOCKER_ARCH}" != "default" ]; then \
     cmake --build build --config Release -j$(nproc)
 
 RUN mkdir -p /app/lib && \
-    find build -name "*.so" -exec cp {} /app/lib \;
+    find build -name "*.so*" -exec cp -P {} /app/lib \;
 
 RUN mkdir -p /app/full \
     && cp build/bin/* /app/full \
@@ -81,7 +81,7 @@ ENTRYPOINT ["/app/tools.sh"]
 ### Light, CLI only
 FROM base AS light
 
-COPY --from=build /app/full/llama-cli /app
+COPY --from=build /app/full/llama-cli /app/full/llama-completion /app
 
 WORKDIR /app
 

@@ -7,6 +7,8 @@
 #include "pca.hpp"
 #include "mean.hpp"
 
+#include <clocale>
+
 #ifdef GGML_USE_CUDA
 #include "ggml-cuda.h"
 #endif
@@ -392,6 +394,8 @@ static int prepare_entries(common_params & params, train_context & ctx_train) {
 }
 
 int main(int argc, char ** argv) {
+    std::setlocale(LC_NUMERIC, "C");
+
     common_params params;
 
     params.out_file = "control_vector.gguf";
@@ -419,10 +423,10 @@ int main(int argc, char ** argv) {
     llama_numa_init(params.numa);
 
     // load the model to get hparams
-    common_init_result llama_init = common_init_from_params(params);
+    auto llama_init = common_init_from_params(params);
 
-    llama_model * model = llama_init.model.get();
-    llama_context * ctx = llama_init.context.get();
+    auto * model = llama_init->model();
+    auto * ctx   = llama_init->context();
 
     // int n_ctx = llama_n_ctx(ctx);
     int n_layers = llama_model_n_layer(model);

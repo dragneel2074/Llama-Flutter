@@ -539,7 +539,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 ],
               ),
               const SizedBox(height: 4),
-              Container(
+              SizedBox(
                 width: double.infinity,
                 child: DropdownButtonFormField<String>(
                   isExpanded: true,

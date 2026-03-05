@@ -1,37 +1,34 @@
 <script lang="ts">
-	import { getDeletionInfo } from '$lib/stores/chat.svelte';
-	import { copyToClipboard } from '$lib/utils/copy';
-	import { parseThinkingContent } from '$lib/utils/thinking';
-	import ChatMessageAssistant from './ChatMessageAssistant.svelte';
-	import ChatMessageUser from './ChatMessageUser.svelte';
+	import { goto } from '$app/navigation';
+	import { base } from '$app/paths';
+	import { getChatActionsContext, setMessageEditContext } from '$lib/contexts';
+	import { chatStore, pendingEditMessageId } from '$lib/stores/chat.svelte';
+	import { conversationsStore } from '$lib/stores/conversations.svelte';
+	import { DatabaseService } from '$lib/services';
+	import { SYSTEM_MESSAGE_PLACEHOLDER } from '$lib/constants/ui';
+	import { MessageRole } from '$lib/enums';
+	import {
+		ChatMessageAssistant,
+		ChatMessageUser,
+		ChatMessageSystem
+	} from '$lib/components/app/chat';
+	import { parseFilesToMessageExtras } from '$lib/utils/browser-only';
 
 	interface Props {
 		class?: string;
 		message: DatabaseMessage;
-		onCopy?: (message: DatabaseMessage) => void;
-		onDelete?: (message: DatabaseMessage) => void;
-		onEditWithBranching?: (message: DatabaseMessage, newContent: string) => void;
-		onEditWithReplacement?: (
-			message: DatabaseMessage,
-			newContent: string,
-			shouldBranch: boolean
-		) => void;
-		onNavigateToSibling?: (siblingId: string) => void;
-		onRegenerateWithBranching?: (message: DatabaseMessage) => void;
+		isLastAssistantMessage?: boolean;
 		siblingInfo?: ChatMessageSiblingInfo | null;
 	}
 
 	let {
 		class: className = '',
 		message,
-		onCopy,
-		onDelete,
-		onEditWithBranching,
-		onEditWithReplacement,
-		onNavigateToSibling,
-		onRegenerateWithBranching,
+		isLastAssistantMessage = false,
 		siblingInfo = null
 	}: Props = $props();
+
+	const chatActions = getChatActionsContext();
 
 	let deletionInfo = $state<{
 		totalCount: number;
@@ -39,57 +36,114 @@
 		assistantMessages: number;
 		messageTypes: string[];
 	} | null>(null);
-	let editedContent = $state(message.content);
+	let editedContent = $derived(message.content);
+	let editedExtras = $derived<DatabaseMessageExtra[]>(message.extra ? [...message.extra] : []);
+	let editedUploadedFiles = $state<ChatUploadedFile[]>([]);
 	let isEditing = $state(false);
 	let showDeleteDialog = $state(false);
 	let shouldBranchAfterEdit = $state(false);
 	let textareaElement: HTMLTextAreaElement | undefined = $state();
 
-	let thinkingContent = $derived.by(() => {
-		if (message.role === 'assistant') {
-			if (message.thinking) {
-				return message.thinking;
+	let showSaveOnlyOption = $derived(message.role === MessageRole.USER);
+
+	setMessageEditContext({
+		get isEditing() {
+			return isEditing;
+		},
+		get editedContent() {
+			return editedContent;
+		},
+		get editedExtras() {
+			return editedExtras;
+		},
+		get editedUploadedFiles() {
+			return editedUploadedFiles;
+		},
+		get originalContent() {
+			return message.content;
+		},
+		get originalExtras() {
+			return message.extra || [];
+		},
+		get showSaveOnlyOption() {
+			return showSaveOnlyOption;
+		},
+		setContent: (content: string) => {
+			editedContent = content;
+		},
+		setExtras: (extras: DatabaseMessageExtra[]) => {
+			editedExtras = extras;
+		},
+		setUploadedFiles: (files: ChatUploadedFile[]) => {
+			editedUploadedFiles = files;
+		},
+		save: handleSaveEdit,
+		saveOnly: handleSaveEditOnly,
+		cancel: handleCancelEdit,
+		startEdit: handleEdit
+	});
+
+	$effect(() => {
+		const pendingId = pendingEditMessageId();
+
+		if (pendingId && pendingId === message.id && !isEditing) {
+			handleEdit();
+			chatStore.clearPendingEditMessageId();
+		}
+	});
+
+	async function handleCancelEdit() {
+		isEditing = false;
+
+		// If canceling a new system message with placeholder content, remove it without deleting children
+		if (message.role === MessageRole.SYSTEM) {
+			const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
+
+			if (conversationDeleted) {
+				goto(`${base}/`);
 			}
 
-			const parsed = parseThinkingContent(message.content);
-
-			return parsed.thinking;
-		}
-		return null;
-	});
-
-	let messageContent = $derived.by(() => {
-		if (message.role === 'assistant') {
-			const parsed = parseThinkingContent(message.content);
-			return parsed.cleanContent?.replace('<|channel|>analysis', '');
+			return;
 		}
 
-		return message.content?.replace('<|channel|>analysis', '');
-	});
-
-	function handleCancelEdit() {
-		isEditing = false;
 		editedContent = message.content;
+		editedExtras = message.extra ? [...message.extra] : [];
+		editedUploadedFiles = [];
 	}
 
-	async function handleCopy() {
-		await copyToClipboard(message.content, 'Message copied to clipboard');
-		onCopy?.(message);
+	function handleCopy() {
+		chatActions.copy(message);
 	}
 
-	function handleConfirmDelete() {
-		onDelete?.(message);
+	async function handleConfirmDelete() {
+		if (message.role === MessageRole.SYSTEM) {
+			const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
+
+			if (conversationDeleted) {
+				goto(`${base}/`);
+			}
+		} else {
+			chatActions.delete(message);
+		}
+
 		showDeleteDialog = false;
 	}
 
 	async function handleDelete() {
-		deletionInfo = await getDeletionInfo(message.id);
+		deletionInfo = await chatStore.getDeletionInfo(message.id);
 		showDeleteDialog = true;
 	}
 
 	function handleEdit() {
 		isEditing = true;
-		editedContent = message.content;
+		// Clear temporary placeholder content for system messages
+		editedContent =
+			message.role === MessageRole.SYSTEM && message.content === SYSTEM_MESSAGE_PLACEHOLDER
+				? ''
+				: message.content;
+		textareaElement?.focus();
+		editedExtras = message.extra ? [...message.extra] : [];
+		editedUploadedFiles = [];
 
 		setTimeout(() => {
 			if (textareaElement) {
@@ -102,33 +156,73 @@
 		}, 0);
 	}
 
-	function handleEditedContentChange(content: string) {
-		editedContent = content;
+	function handleRegenerate(modelOverride?: string) {
+		chatActions.regenerateWithBranching(message, modelOverride);
 	}
 
-	function handleEditKeydown(event: KeyboardEvent) {
-		if (event.key === 'Enter' && !event.shiftKey) {
-			event.preventDefault();
-			handleSaveEdit();
-		} else if (event.key === 'Escape') {
-			event.preventDefault();
-			handleCancelEdit();
-		}
+	function handleContinue() {
+		chatActions.continueAssistantMessage(message);
 	}
 
-	function handleRegenerate() {
-		onRegenerateWithBranching?.(message);
+	function handleNavigateToSibling(siblingId: string) {
+		chatActions.navigateToSibling(siblingId);
 	}
 
-	function handleSaveEdit() {
-		if (message.role === 'user') {
-			onEditWithBranching?.(message, editedContent.trim());
+	async function handleSaveEdit() {
+		if (message.role === MessageRole.SYSTEM) {
+			// System messages: update in place without branching
+			const newContent = editedContent.trim();
+
+			// If content is empty, remove without deleting children
+			if (!newContent) {
+				const conversationDeleted = await chatStore.removeSystemPromptPlaceholder(message.id);
+				isEditing = false;
+				if (conversationDeleted) {
+					goto(`${base}/`);
+				}
+				return;
+			}
+
+			await DatabaseService.updateMessage(message.id, { content: newContent });
+			const index = conversationsStore.findMessageIndex(message.id);
+			if (index !== -1) {
+				conversationsStore.updateMessageAtIndex(index, { content: newContent });
+			}
+		} else if (message.role === MessageRole.USER) {
+			const finalExtras = await getMergedExtras();
+			chatActions.editWithBranching(message, editedContent.trim(), finalExtras);
 		} else {
-			onEditWithReplacement?.(message, editedContent.trim(), shouldBranchAfterEdit);
+			// For assistant messages, preserve exact content including trailing whitespace
+			// This is important for the Continue feature to work properly
+			chatActions.editWithReplacement(message, editedContent, shouldBranchAfterEdit);
 		}
 
 		isEditing = false;
 		shouldBranchAfterEdit = false;
+		editedUploadedFiles = [];
+	}
+
+	async function handleSaveEditOnly() {
+		if (message.role === MessageRole.USER) {
+			// For user messages, trim to avoid accidental whitespace
+			const finalExtras = await getMergedExtras();
+			chatActions.editUserMessagePreserveResponses(message, editedContent.trim(), finalExtras);
+		}
+
+		isEditing = false;
+		editedUploadedFiles = [];
+	}
+
+	async function getMergedExtras(): Promise<DatabaseMessageExtra[]> {
+		if (editedUploadedFiles.length === 0) {
+			return editedExtras;
+		}
+
+		const plainFiles = $state.snapshot(editedUploadedFiles);
+		const result = await parseFilesToMessageExtras(plainFiles);
+		const newExtras = result?.extras || [];
+
+		return [...editedExtras, ...newExtras];
 	}
 
 	function handleShowDeleteDialogChange(show: boolean) {
@@ -136,23 +230,31 @@
 	}
 </script>
 
-{#if message.role === 'user'}
-	<ChatMessageUser
+{#if message.role === MessageRole.SYSTEM}
+	<ChatMessageSystem
 		bind:textareaElement
 		class={className}
 		{deletionInfo}
-		{editedContent}
-		{isEditing}
 		{message}
-		onCancelEdit={handleCancelEdit}
 		onConfirmDelete={handleConfirmDelete}
 		onCopy={handleCopy}
 		onDelete={handleDelete}
 		onEdit={handleEdit}
-		onEditKeydown={handleEditKeydown}
-		onEditedContentChange={handleEditedContentChange}
-		{onNavigateToSibling}
-		onSaveEdit={handleSaveEdit}
+		onNavigateToSibling={handleNavigateToSibling}
+		onShowDeleteDialogChange={handleShowDeleteDialogChange}
+		{showDeleteDialog}
+		{siblingInfo}
+	/>
+{:else if message.role === MessageRole.USER}
+	<ChatMessageUser
+		class={className}
+		{deletionInfo}
+		{message}
+		onConfirmDelete={handleConfirmDelete}
+		onCopy={handleCopy}
+		onDelete={handleDelete}
+		onEdit={handleEdit}
+		onNavigateToSibling={handleNavigateToSibling}
 		onShowDeleteDialogChange={handleShowDeleteDialogChange}
 		{showDeleteDialog}
 		{siblingInfo}
@@ -162,25 +264,18 @@
 		bind:textareaElement
 		class={className}
 		{deletionInfo}
-		{editedContent}
-		{isEditing}
+		{isLastAssistantMessage}
 		{message}
-		{messageContent}
-		onCancelEdit={handleCancelEdit}
+		messageContent={message.content}
 		onConfirmDelete={handleConfirmDelete}
+		onContinue={handleContinue}
 		onCopy={handleCopy}
 		onDelete={handleDelete}
 		onEdit={handleEdit}
-		onEditKeydown={handleEditKeydown}
-		onEditedContentChange={handleEditedContentChange}
-		{onNavigateToSibling}
+		onNavigateToSibling={handleNavigateToSibling}
 		onRegenerate={handleRegenerate}
-		onSaveEdit={handleSaveEdit}
 		onShowDeleteDialogChange={handleShowDeleteDialogChange}
-		{shouldBranchAfterEdit}
-		onShouldBranchAfterEditChange={(value) => (shouldBranchAfterEdit = value)}
 		{showDeleteDialog}
 		{siblingInfo}
-		{thinkingContent}
 	/>
 {/if}

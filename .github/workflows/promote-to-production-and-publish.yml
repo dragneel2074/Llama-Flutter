@@ -1,0 +1,75 @@
+name: Promote Dev To Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      dev_ref:
+        description: "dev branch ref to promote (branch, tag, or commit)"
+        required: true
+        default: "dev"
+      sync_to_production:
+        description: "Push selected ref to production master"
+        required: true
+        type: boolean
+        default: true
+      publish_pub_dev:
+        description: "Publish package to pub.dev after sync"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.dev_ref }}
+          fetch-depth: 0
+
+      - name: Push to production repository master
+        if: github.event.inputs.sync_to_production == 'true'
+        env:
+          PRODUCTION_REPO_PAT: ${{ secrets.PRODUCTION_REPO_PAT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${PRODUCTION_REPO_PAT}" ]]; then
+            echo "Missing secret: PRODUCTION_REPO_PAT"
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote add production "https://x-access-token:${PRODUCTION_REPO_PAT}@github.com/dragneel2074/Llama-Flutter.git"
+          git push production HEAD:master
+
+      - name: Setup Flutter
+        if: github.event.inputs.publish_pub_dev == 'true'
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Publish to pub.dev
+        if: github.event.inputs.publish_pub_dev == 'true'
+        env:
+          PUB_DEV_CREDENTIALS_JSON: ${{ secrets.PUB_DEV_CREDENTIALS_JSON }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${PUB_DEV_CREDENTIALS_JSON}" ]]; then
+            echo "Missing secret: PUB_DEV_CREDENTIALS_JSON"
+            exit 1
+          fi
+
+          mkdir -p "${HOME}/.pub-cache"
+          printf '%s' "${PUB_DEV_CREDENTIALS_JSON}" > "${HOME}/.pub-cache/credentials.json"
+
+          flutter pub get
+          flutter pub publish --dry-run
+          flutter pub publish --force

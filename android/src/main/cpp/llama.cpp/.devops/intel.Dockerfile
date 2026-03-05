@@ -6,7 +6,7 @@ FROM intel/deep-learning-essentials:$ONEAPI_VERSION AS build
 
 ARG GGML_SYCL_F16=OFF
 RUN apt-get update && \
-    apt-get install -y git libcurl4-openssl-dev
+    apt-get install -y git libssl-dev
 
 WORKDIR /app
 
@@ -21,7 +21,7 @@ RUN if [ "${GGML_SYCL_F16}" = "ON" ]; then \
     cmake --build build --config Release -j$(nproc)
 
 RUN mkdir -p /app/lib && \
-    find build -name "*.so" -exec cp {} /app/lib \;
+    find build -name "*.so*" -exec cp -P {} /app/lib \;
 
 RUN mkdir -p /app/full \
     && cp build/bin/* /app/full \
@@ -73,7 +73,7 @@ ENTRYPOINT ["/app/tools.sh"]
 FROM base AS light
 
 COPY --from=build /app/lib/ /app
-COPY --from=build /app/full/llama-cli /app
+COPY --from=build /app/full/llama-cli /app/full/llama-completion /app
 
 WORKDIR /app
 

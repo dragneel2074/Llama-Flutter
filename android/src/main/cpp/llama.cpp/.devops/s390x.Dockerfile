@@ -11,7 +11,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt install -y --no-install-recommends \
         git cmake ccache ninja-build \
         # WARNING: Do not use libopenblas-openmp-dev. libopenblas-dev is faster.
-        libopenblas-dev libcurl4-openssl-dev && \
+        libopenblas-dev libssl-dev && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -24,8 +24,9 @@ RUN --mount=type=cache,target=/root/.ccache \
         -DCMAKE_C_COMPILER_LAUNCHER=ccache \
         -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
         -DLLAMA_BUILD_TESTS=OFF \
-        -DGGML_BACKEND_DL=OFF \
         -DGGML_NATIVE=OFF \
+        -DGGML_BACKEND_DL=ON \
+        -DGGML_CPU_ALL_VARIANTS=ON \
         -DGGML_BLAS=ON \
         -DGGML_BLAS_VENDOR=OpenBLAS && \
     cmake --build build --config Release -j $(nproc) && \
@@ -103,7 +104,8 @@ FROM base AS light
 WORKDIR /llama.cpp/bin
 
 # Copy llama.cpp binaries and libraries
-COPY --from=collector /llama.cpp/bin/llama-cli /llama.cpp/bin
+COPY --from=collector /llama.cpp/bin/*.so /llama.cpp/bin
+COPY --from=collector /llama.cpp/bin/llama-cli /llama.cpp/bin/llama-completion /llama.cpp/bin
 
 ENTRYPOINT [ "/llama.cpp/bin/llama-cli" ]
 
@@ -116,6 +118,7 @@ ENV LLAMA_ARG_HOST=0.0.0.0
 WORKDIR /llama.cpp/bin
 
 # Copy llama.cpp binaries and libraries
+COPY --from=collector /llama.cpp/bin/*.so /llama.cpp/bin
 COPY --from=collector /llama.cpp/bin/llama-server /llama.cpp/bin
 
 EXPOSE 8080

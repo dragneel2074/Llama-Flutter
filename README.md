@@ -14,7 +14,7 @@ Run GGUF models on Android with [llama.cpp](https://github.com/ggerganov/llama.c
 - **18 Parameters** - Complete control: temperature, penalties, mirostat, seed, and more
 - **7 Chat Templates** - ChatML, Llama-2, Alpaca, Vicuna, Phi, Gemma, Zephyr
 - **Auto-Detection** - Chat templates detected from model filename
-- **Latest llama.cpp** - Built on October 2025 llama.cpp (no patches needed)
+- **Latest llama.cpp** - Built on March 4, 2026 llama.cpp release (b8201)
 - **ARM64 Optimized** - NEON and dot product optimizations enabled
 
 ## Local Chat App
