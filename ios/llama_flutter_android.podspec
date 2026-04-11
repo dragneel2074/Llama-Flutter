@@ -9,6 +9,7 @@ Pod::Spec.new do |s|
   s.source           = { :path => '.' }
   s.ios.deployment_target = '14.0'
   s.swift_version    = '5.0'
+  s.dependency 'Flutter'
 
   # Plugin Swift/ObjC++ sources (relative to ios/)
   s.source_files = 'Classes/**/*.{swift,h,m,mm}'
