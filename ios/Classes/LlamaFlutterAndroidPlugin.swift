@@ -6,7 +6,12 @@ public class LlamaFlutterAndroidPlugin: NSObject, FlutterPlugin, LlamaHostApiPro
     private var flutterApi: LlamaFlutterApi?
     private let wrapper = LlamaIosWrapper()
     private var isModelLoaded_ = false
-    private var isStopping = false
+    private let stoppingLock = NSLock()
+    private var _isStopping = false
+    private var isStopping: Bool {
+        get { stoppingLock.lock(); defer { stoppingLock.unlock() }; return _isStopping }
+        set { stoppingLock.lock(); defer { stoppingLock.unlock() }; _isStopping = newValue }
+    }
     private var currentModelPath: String?
     private let queue = DispatchQueue(
         label: "com.write4me.llama_flutter_android.inference",

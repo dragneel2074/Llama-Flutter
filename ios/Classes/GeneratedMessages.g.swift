@@ -251,34 +251,36 @@ enum LlamaHostApiSetup {
 // MARK: - Flutter API (Swift calls Dart)
 
 class LlamaFlutterApi {
-    private let binaryMessenger: FlutterBinaryMessenger
     private let codec = FlutterStandardMessageCodec.sharedInstance()
 
-    init(binaryMessenger: FlutterBinaryMessenger) {
-        self.binaryMessenger = binaryMessenger
-    }
+    // Channels are cached — creating one per token call during inference causes excessive allocation
+    private let tokenChannel: FlutterBasicMessageChannel
+    private let doneChannel: FlutterBasicMessageChannel
+    private let errorChannel: FlutterBasicMessageChannel
+    private let progressChannel: FlutterBasicMessageChannel
 
-    private func ch(_ name: String) -> FlutterBasicMessageChannel {
-        FlutterBasicMessageChannel(name: name, binaryMessenger: binaryMessenger, codec: codec)
+    init(binaryMessenger: FlutterBinaryMessenger) {
+        let base = "dev.flutter.pigeon.llama_flutter_android.LlamaFlutterApi"
+        let codec = FlutterStandardMessageCodec.sharedInstance()
+        tokenChannel    = FlutterBasicMessageChannel(name: "\(base).onToken",        binaryMessenger: binaryMessenger, codec: codec)
+        doneChannel     = FlutterBasicMessageChannel(name: "\(base).onDone",         binaryMessenger: binaryMessenger, codec: codec)
+        errorChannel    = FlutterBasicMessageChannel(name: "\(base).onError",        binaryMessenger: binaryMessenger, codec: codec)
+        progressChannel = FlutterBasicMessageChannel(name: "\(base).onLoadProgress", binaryMessenger: binaryMessenger, codec: codec)
     }
 
     func onToken(_ token: String, completion: @escaping () -> Void) {
-        ch("dev.flutter.pigeon.llama_flutter_android.LlamaFlutterApi.onToken")
-            .sendMessage([token]) { _ in completion() }
+        tokenChannel.sendMessage([token]) { _ in completion() }
     }
 
     func onDone(completion: @escaping () -> Void) {
-        ch("dev.flutter.pigeon.llama_flutter_android.LlamaFlutterApi.onDone")
-            .sendMessage(nil) { _ in completion() }
+        doneChannel.sendMessage(nil) { _ in completion() }
     }
 
     func onError(_ error: String, completion: @escaping () -> Void) {
-        ch("dev.flutter.pigeon.llama_flutter_android.LlamaFlutterApi.onError")
-            .sendMessage([error]) { _ in completion() }
+        errorChannel.sendMessage([error]) { _ in completion() }
     }
 
     func onLoadProgress(_ progress: Double, completion: @escaping () -> Void) {
-        ch("dev.flutter.pigeon.llama_flutter_android.LlamaFlutterApi.onLoadProgress")
-            .sendMessage([progress]) { _ in completion() }
+        progressChannel.sendMessage([progress]) { _ in completion() }
     }
 }

@@ -187,7 +187,10 @@ static std::string sanitizeUTF8(const char* str, size_t len) {
                 batch.n_tokens++;
                 i++;
             }
-            llama_decode(g_ctx, batch);
+            if (llama_decode(g_ctx, batch) != 0) {
+                llama_batch_free(batch);
+                [NSException raise:@"LlamaDecodeError" format:@"llama_decode failed during prompt evaluation"];
+            }
         }
         g_n_past += (int)tokens.size();
         llama_batch_free(batch);
@@ -244,7 +247,10 @@ static std::string sanitizeUTF8(const char* str, size_t len) {
         next_batch.seq_id[0][0] = 0;
         next_batch.logits[0]    = 1;
         next_batch.n_tokens     = 1;
-        llama_decode(g_ctx, next_batch);
+        if (llama_decode(g_ctx, next_batch) != 0) {
+            llama_batch_free(next_batch);
+            break;
+        }
         llama_batch_free(next_batch);
         g_n_past++;
     }

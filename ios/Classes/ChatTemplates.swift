@@ -71,15 +71,15 @@ class AlpacaTemplate: ChatTemplate {
     func format(messages: [TemplateChatMessage]) -> String {
         let system = messages.first(where: { $0.role == "system" })?.content
             ?? "Below is an instruction that describes a task. Write a response that appropriately completes the request."
-        var result = "\(system)\\n\\n"
+        var result = "\(system)\n\n"
         for msg in messages {
             switch msg.role {
-            case "user":      result += "### Instruction:\\n\(msg.content)\\n\\n"
-            case "assistant": result += "### Response:\\n\(msg.content)\\n\\n"
+            case "user":      result += "### Instruction:\n\(msg.content)\n\n"
+            case "assistant": result += "### Response:\n\(msg.content)\n\n"
             default: break
             }
         }
-        result += "### Response:\\n"
+        result += "### Response:\n"
         return result
     }
 }
@@ -89,11 +89,11 @@ class VicunaTemplate: ChatTemplate {
     func format(messages: [TemplateChatMessage]) -> String {
         let system = messages.first(where: { $0.role == "system" })?.content
             ?? "A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions."
-        var result = "\(system)\\n\\n"
+        var result = "\(system)\n\n"
         for msg in messages {
             switch msg.role {
-            case "user":      result += "USER: \(msg.content)\\n"
-            case "assistant": result += "ASSISTANT: \(msg.content)\\n"
+            case "user":      result += "USER: \(msg.content)\n"
+            case "assistant": result += "ASSISTANT: \(msg.content)\n"
             default: break
             }
         }
@@ -108,13 +108,13 @@ class PhiTemplate: ChatTemplate {
         var result = ""
         for msg in messages {
             switch msg.role {
-            case "system":    result += "<|system|>\\n\(msg.content)<|end|>\\n"
-            case "user":      result += "<|user|>\\n\(msg.content)<|end|>\\n"
-            case "assistant": result += "<|assistant|>\\n\(msg.content)<|end|>\\n"
+            case "system":    result += "<|system|>\n\(msg.content)<|end|>\n"
+            case "user":      result += "<|user|>\n\(msg.content)<|end|>\n"
+            case "assistant": result += "<|assistant|>\n\(msg.content)<|end|>\n"
             default: break
             }
         }
-        result += "<|assistant|>\\n"
+        result += "<|assistant|>\n"
         return result
     }
 }
