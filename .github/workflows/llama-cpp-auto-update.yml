@@ -61,6 +61,7 @@ jobs:
 
           echo "${latest_tag}" > .llama_cpp_version
 
+          mkdir -p docs
           {
             echo "# Llama.cpp Update Notes (${latest_tag})"
             echo

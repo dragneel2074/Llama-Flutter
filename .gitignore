@@ -87,4 +87,7 @@ CONTEXT_AUTO_CLEAR_FIX.md
 FLLAMA_COMPARISON.md
 SIMPLE_CONTEXT_COMPLETE.md
 SIMPLE_FINAL.md
-logs/
+logs/.dual-graph/
+CLAUDE.md
+.claude/
+.dual-graph/
