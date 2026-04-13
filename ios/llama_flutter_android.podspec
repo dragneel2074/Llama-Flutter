@@ -11,17 +11,40 @@ Pod::Spec.new do |s|
   s.swift_version    = '5.0'
   s.dependency 'Flutter'
 
-  # Copy llama.cpp sources into the pod's own directory so CocoaPods
-  # glob resolution works correctly regardless of symlink depth.
-  s.prepare_command = <<-CMD
+  # Copy llama.cpp sources and preprocess the Metal shader.
+  # The .metal file uses #include "ggml-common.h" (one dir up) and
+  # #include "ggml-metal-impl.h" which Xcode's Metal compiler cannot
+  # find via HEADER_SEARCH_PATHS. We inline both headers into a single
+  # self-contained .metal file at prepare time.
+  s.prepare_command = <<-'CMD'
     set -e
     LLAMA_SRC="$(pwd)/../android/src/main/cpp/llama.cpp"
     DST="$(pwd)/llama_cpp_src"
     rm -rf "$DST"
     mkdir -p "$DST"
-    cp -r "$LLAMA_SRC/include"       "$DST/include"
-    cp -r "$LLAMA_SRC/src"           "$DST/src"
-    cp -r "$LLAMA_SRC/ggml"          "$DST/ggml"
+    cp -r "$LLAMA_SRC/include"  "$DST/include"
+    cp -r "$LLAMA_SRC/src"      "$DST/src"
+    cp -r "$LLAMA_SRC/ggml"     "$DST/ggml"
+
+    # Preprocess ggml-metal.metal: inline ggml-common.h and ggml-metal-impl.h
+    # so Xcode Metal compiler can build it without external header search paths.
+    METAL_DIR="$DST/ggml/src/ggml-metal"
+    COMMON_H="$DST/ggml/src/ggml-common.h"
+    IMPL_H="$METAL_DIR/ggml-metal-impl.h"
+    METAL_SRC="$METAL_DIR/ggml-metal.metal"
+    METAL_OUT="$METAL_DIR/ggml-metal-ios.metal"
+
+    # Step 1: replace __embed_ggml-common.h__ with the file contents
+    sed -e "/__embed_ggml-common.h__/r $COMMON_H" \
+        -e "/__embed_ggml-common.h__/d" \
+        < "$METAL_SRC" > "${METAL_OUT}.tmp"
+
+    # Step 2: inline ggml-metal-impl.h
+    sed -e "/#include \"ggml-metal-impl.h\"/r $IMPL_H" \
+        -e "/#include \"ggml-metal-impl.h\"/d" \
+        < "${METAL_OUT}.tmp" > "$METAL_OUT"
+
+    rm -f "${METAL_OUT}.tmp"
   CMD
 
   llama_root = '$(PODS_TARGET_SRCROOT)/llama_cpp_src'
@@ -48,11 +71,13 @@ Pod::Spec.new do |s|
     'llama_cpp_src/ggml/src/ggml-metal/ggml-metal-common.cpp',
     'llama_cpp_src/ggml/src/ggml-metal/ggml-metal-device.cpp',
     'llama_cpp_src/ggml/src/ggml-metal/ggml-metal-ops.cpp',
+    'llama_cpp_src/ggml/src/ggml-metal/ggml-metal-context.m',
+    'llama_cpp_src/ggml/src/ggml-metal/ggml-metal-device.m',
   ]
 
   s.resource_bundles = {
     'llama_flutter_android_metal' => [
-      'llama_cpp_src/ggml/src/ggml-metal/ggml-metal.metal',
+      'llama_cpp_src/ggml/src/ggml-metal/ggml-metal-ios.metal',
     ]
   }
 
