@@ -46,7 +46,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git remote add production "https://x-access-token:${PRODUCTION_REPO_PAT}@github.com/dragneel2074/Llama-Flutter.git"
+          git remote add production "https://oauth2:${PRODUCTION_REPO_PAT}@github.com/dragneel2074/Llama-Flutter.git"
           git push production HEAD:master
 
       - name: Setup Flutter
