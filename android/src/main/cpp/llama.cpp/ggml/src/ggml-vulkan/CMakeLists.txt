@@ -144,6 +144,9 @@ if (Vulkan_FOUND)
     if (CMAKE_CROSSCOMPILING)
         list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -DCMAKE_TOOLCHAIN_FILE=${HOST_CMAKE_TOOLCHAIN_FILE})
         message(STATUS "vulkan-shaders-gen toolchain file: ${HOST_CMAKE_TOOLCHAIN_FILE}")
+        if (CMAKE_MAKE_PROGRAM)
+            list(APPEND VULKAN_SHADER_GEN_CMAKE_ARGS -DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM})
+        endif()
     endif()
 
     ExternalProject_Add(

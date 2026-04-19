@@ -1,3 +1,8 @@
+## 0.2.2 (April 19, 2026)
+
+### Fixed
+- Fix Vulkan build on Windows when cross-compiling for Android — forward `CMAKE_MAKE_PROGRAM` (Ninja path) into the `vulkan-shaders-gen` ExternalProject sub-build
+
 ## 0.2.1 (April 19, 2026)
 
 ### Fixed
