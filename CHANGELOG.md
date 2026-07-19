@@ -1,3 +1,27 @@
+## 0.2.5 (July 20, 2026)
+
+### Fixed
+- **Startup crash on unsupported ABIs**: `System.loadLibrary("llama_jni")` in a
+  static initializer turned `UnsatisfiedLinkError` into `NoClassDefFoundError`
+  at plugin registration on devices without arm64 (app-killing crash). The
+  library now loads into a `nativeLibAvailable` flag and all native entry
+  points fail gracefully with "Local AI is not supported on this device."
+
+### Changed
+- **Removed the foreground service and `FOREGROUND_SERVICE_SPECIAL_USE`
+  permission** (thanks @heckmon, #1). The plugin no longer forces a
+  special-use FGS declaration onto every consuming app's Play Console
+  submission. Apps that need inference to survive backgrounding should run
+  their own foreground service.
+- README: documented the R8/proguard keep rules consumers need when
+  `minifyEnabled` is on (thanks @heckmon).
+
+## 0.2.4 (July 5, 2026)
+
+### Fixed
+- Removed the Mali GPU blanket ban from `detectGpu` layer recommendations
+- Bumped vendored llama.cpp to b8851
+
 ## 0.2.3 (April 20, 2026)
 
 ### Fixed

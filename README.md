@@ -28,12 +28,48 @@ Run GGUF models on Android with [llama.cpp](https://github.com/ggerganov/llama.c
 
 ## Installation
 
-Add to your `pubspec.yaml`:
+1) Add to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
   llama_flutter_android: ^0.2.0
 ```
+
+2) If your app uses R8/proguard (`minifyEnabled true`), create or extend
+`android/app/proguard-rules.pro` with:
+
+```proguard
+-keep class com.write4me.llama_flutter_android.** { *; }
+
+-keep class kotlin.jvm.functions.Function1
+-keepclassmembers class * implements kotlin.jvm.functions.Function1 {
+    public java.lang.Object invoke(java.lang.Object);
+}
+
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
+```
+
+3) And reference it from `android/app/build.gradle` (or `.kts`):
+
+```kotlin
+android {
+  buildTypes {
+        release {
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+  }
+}
+```
+
+> Note: since 0.2.5 the plugin no longer declares a foreground service or
+> the `FOREGROUND_SERVICE_SPECIAL_USE` permission — nothing to declare in
+> Play Console. If you need inference to survive backgrounding, run your
+> own foreground service in the app.
 
 ## Quick Start
 

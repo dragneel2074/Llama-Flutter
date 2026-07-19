@@ -2,8 +2,6 @@ package com.write4me.llama_flutter_android
 
 import android.app.ActivityManager
 import android.content.Context
-import android.content.Intent
-import androidx.core.content.ContextCompat
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import kotlinx.coroutines.*
 import java.util.concurrent.atomic.AtomicBoolean
@@ -18,9 +16,24 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi {
     private var currentModelPath: String? = null
 
     companion object {
-        init {
+        // llama native libs are built for arm64-v8a only. On 32-bit devices
+        // loadLibrary throws UnsatisfiedLinkError, and doing that in a static
+        // initializer turns it into NoClassDefFoundError at plugin
+        // registration — an app-killing startup crash (seen in production).
+        // Load safely and let every native entry point no-op instead.
+        @JvmStatic
+        val nativeLibAvailable: Boolean = try {
             System.loadLibrary("llama_jni")
+            true
+        } catch (t: Throwable) {
+            android.util.Log.e(
+                "LlamaFlutterAndroid",
+                "llama_jni unavailable — Local AI disabled on this device", t)
+            false
         }
+
+        private const val UNSUPPORTED_MSG =
+            "Local AI is not supported on this device."
     }
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -30,6 +43,9 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi {
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+        isStopping.set(true)
+        if (nativeLibAvailable) nativeStop()
+        generationJob?.cancel()
         scope.cancel()
         if (isModelLoaded.get()) {
             nativeFreeModel()
@@ -38,12 +54,12 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi {
     }
 
     override fun loadModel(config: ModelConfig, callback: (Result<Unit>) -> Unit) {
+        if (!nativeLibAvailable) {
+            callback(Result.failure(UnsupportedOperationException(UNSUPPORTED_MSG)))
+            return
+        }
         scope.launch {
             try {
-                // Start foreground service for long-running task
-                val intent = Intent(context, InferenceService::class.java)
-                ContextCompat.startForegroundService(context, intent)
-
                 // Load model with progress callback
                 nativeLoadModel(
                     config.modelPath,
@@ -147,7 +163,7 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi {
     override fun stop(callback: (Result<Unit>) -> Unit) {
         isStopping.set(true)
         generationJob?.cancel()
-        nativeStop()
+        if (nativeLibAvailable) nativeStop()
         callback(Result.success(Unit))
     }
 
@@ -159,11 +175,7 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi {
                     nativeFreeModel()
                     isModelLoaded.set(false)
                 }
-                
-                // Stop foreground service
-                val intent = Intent(context, InferenceService::class.java)
-                context.stopService(intent)
-                
+
                 withContext(Dispatchers.Main) {
                     callback(Result.success(Unit))
                 }
@@ -257,6 +269,9 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi {
     }
 
     override fun getContextInfo(): ContextInfo {
+        if (!nativeLibAvailable) {
+            return ContextInfo(tokensUsed = 0L, contextSize = 0L, usagePercentage = 0.0)
+        }
         val tokensUsed = nativeGetTokensUsed().toLong()
         val contextSize = nativeGetContextSize().toLong()
         val usagePercentage = if (contextSize > 0) {
@@ -273,6 +288,10 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi {
     }
 
     override fun clearContext(callback: (Result<Unit>) -> Unit) {
+        if (!nativeLibAvailable) {
+            callback(Result.success(Unit))
+            return
+        }
         scope.launch {
             try {
                 nativeClearContext()
@@ -288,6 +307,7 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi {
     }
 
     override fun setSystemPromptLength(length: Long) {
+        if (!nativeLibAvailable) return
         nativeSetSystemPromptLength(length.toInt())
     }
 
@@ -308,6 +328,17 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi {
     }
 
     override fun detectGpu(callback: (Result<GpuInfo>) -> Unit) {
+        if (!nativeLibAvailable) {
+            callback(Result.success(GpuInfo(
+                vulkanSupported = false,
+                gpuName = "None",
+                vulkanApiVersion = -1L,
+                deviceLocalMemoryBytes = -1L,
+                freeRamBytes = -1L,
+                recommendedGpuLayers = 0L
+            )))
+            return
+        }
         scope.launch {
             try {
                 val outStats = LongArray(2) { -1L }
@@ -363,7 +394,6 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi {
         val safeRam = (freeRamBytes * 0.7).toLong()
         return when {
             !vulkanSupported -> 0
-            gpuName.contains("Mali", ignoreCase = true) -> 0
             safeRam < GB -> 0                                          // < 1 GB — truly too low
             safeRam < 2 * GB && deviceLocalMemoryBytes < 3 * GB -> 0  // low RAM + low VRAM
             safeRam < 3 * GB || deviceLocalMemoryBytes < 2 * GB -> 16 // partial offload

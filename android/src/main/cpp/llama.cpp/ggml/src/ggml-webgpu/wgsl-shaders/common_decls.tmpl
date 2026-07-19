@@ -45,6 +45,13 @@ fn load_u16_at_src0(byte_offset: u32) -> u32 {
     return (word >> shift) & 0xFFFFu;
 }
 
+// Always reads the 4-byte-aligned word containing byte_offset.
+// Caller extracts the 16-bit half it needs via & 0xFFFFu or >> 16u.
+// this is used in k-quants for better performance
+fn load_u32_at_src0_aligned(byte_offset: u32) -> u32 {
+    return src0[(byte_offset & ~3u) / 4u];
+}
+
 fn load_u32_at_src0(byte_offset: u32) -> u32 {
     let word_idx = byte_offset / 4u;
     let shift = (byte_offset & 0x3u) * 8u;
@@ -88,11 +95,10 @@ struct q5_1 {
 };
 #endif
 
-
 #ifdef Q8_1_T
 struct q8_1 {
     d: f16,
-    m: f16,
+    s: f16, // d * sum(qs[i])
     qs: array<u32, 8>
 };
 #endif
@@ -889,3 +895,24 @@ const kvalues_iq4nl = array<i32, 16>(
 );
 
 #endif
+
+#if defined(MXFP4_LUT) || defined(NVFP4_LUT)
+const kvalues_mxfp4 = array<i32, 16>(
+    0, 1, 2, 3, 4, 6, 8, 12, 0, -1, -2, -3, -4, -6, -8, -12
+);
+#endif // MXFP4_LUT || NVFP4_LUT
+
+#ifdef NVFP4_LUT
+fn ue4m3_to_fp32(u: u32) -> f32 {
+    if (u == 0u || u == 127u) {
+        return 0.0;
+    }
+    let exp = (u >> 3u) & 15u;
+    let man = u & 7u;
+    if (exp == 0u) {
+        return f32(man) * (1.0 / 512.0);
+    }
+    let bits = ((exp + 120u) << 23u) | (man << 20u);
+    return bitcast<f32>(bits);
+}
+#endif // NVFP4_LUT
