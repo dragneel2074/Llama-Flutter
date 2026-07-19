@@ -8,7 +8,10 @@ plugins {
 android {
     namespace = "com.example.chat_app"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    // Pinned: flutter.ndkVersion resolves to 28.2 which is a broken install
+    // on this machine (missing source.properties); r27 is the documented
+    // toolchain for this plugin (16KB page size support).
+    ndkVersion = "27.0.12077973"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11

@@ -1,3 +1,26 @@
+## 0.2.6 (July 20, 2026)
+
+### Fixed
+- **Use-after-free crash on `dispose()`/engine detach during generation**:
+  the model could be freed while `llama_decode` was still running on another
+  thread. Both paths now wait (bounded) for the generation job to finish
+  before `nativeFreeModel()`.
+- **Streams now always terminate**: `onDone` was suppressed after `stop()`
+  and errors never closed the Dart stream, leaving the controller
+  permanently stuck in "Already generating". Every generation now ends with
+  a terminal `onDone`/`onError`, and the Dart controller resets state on
+  both.
+- **Token ordering**: per-token delivery used a new unordered coroutine per
+  token (tokens could reach Dart scrambled; `onDone` could beat the last
+  tokens). Replaced with strictly-FIFO main-thread `Handler.post`, which is
+  also much cheaper at 20+ tokens/sec.
+- `loadModel()` while a generation is running is now rejected instead of
+  racing the active context.
+
+### Changed
+- Vendored llama.cpp updated to b10068 (note: prebuilt `.so` binaries are
+  rebuilt separately; a source bump alone does not change shipped natives).
+
 ## 0.2.5 (July 20, 2026)
 
 ### Fixed

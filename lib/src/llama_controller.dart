@@ -95,6 +95,8 @@ class LlamaController implements LlamaFlutterApi {
   Future<void> stop() async {
     if (!_isGenerating) return;
     await _api.stop();
+    // The native side delivers a terminal onDone after a stop, but reset
+    // eagerly so callers can start a new generation immediately.
     _isGenerating = false;
   }
 
@@ -235,7 +237,13 @@ class LlamaController implements LlamaFlutterApi {
 
   @override
   void onError(String error) {
-    _tokenController?.addError(Exception(error));
+    // Terminal event: without closing here, a failed generation left the
+    // stream open forever and the controller stuck in "Already generating".
+    _isGenerating = false;
+    final controller = _tokenController;
+    _tokenController = null;
+    controller?.addError(Exception(error));
+    controller?.close();
   }
 
   @override

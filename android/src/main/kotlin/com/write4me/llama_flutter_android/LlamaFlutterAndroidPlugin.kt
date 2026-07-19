@@ -2,6 +2,8 @@ package com.write4me.llama_flutter_android
 
 import android.app.ActivityManager
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import kotlinx.coroutines.*
 import java.util.concurrent.atomic.AtomicBoolean
@@ -14,6 +16,13 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi {
     private val isModelLoaded = AtomicBoolean(false)
     private val isStopping = AtomicBoolean(false)
     private var currentModelPath: String? = null
+
+    // FIFO main-thread delivery. The previous per-token
+    // scope.launch { withContext(Main) { ... } } pattern created a NEW
+    // unordered coroutine per token — tokens could reach Dart out of order
+    // and onDone could beat the last tokens. Handler.post is strictly FIFO
+    // and far cheaper at 20+ tokens/sec.
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     companion object {
         // llama native libs are built for arm64-v8a only. On 32-bit devices
@@ -45,6 +54,10 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi {
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         isStopping.set(true)
         if (nativeLibAvailable) nativeStop()
+        // Bounded wait for the native call to return before freeing the
+        // model — freeing mid-decode is a use-after-free crash. Short cap:
+        // this runs on the platform thread during engine teardown.
+        runBlocking { withTimeoutOrNull(2_000) { generationJob?.join() } }
         generationJob?.cancel()
         scope.cancel()
         if (isModelLoaded.get()) {
@@ -58,6 +71,11 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi {
             callback(Result.failure(UnsupportedOperationException(UNSUPPORTED_MSG)))
             return
         }
+        if (generationJob?.isActive == true) {
+            callback(Result.failure(
+                IllegalStateException("Cannot load a model while generating")))
+            return
+        }
         scope.launch {
             try {
                 // Load model with progress callback
@@ -67,12 +85,8 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi {
                     config.contextSize,
                     config.nGpuLayers ?: 0L
                 ) { progress ->
-                    scope.launch {
-                        withContext(Dispatchers.Main) {
-                            flutterApi.onLoadProgress(progress) { result ->
-                                // Handle result if needed
-                            }
-                        }
+                    mainHandler.post {
+                        flutterApi.onLoadProgress(progress) { }
                     }
                 }
 
@@ -122,38 +136,28 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi {
                     request.penalizeNewline
                 ) { token ->
                     if (!isStopping.get()) {
-                        scope.launch {
-                            withContext(Dispatchers.Main) {
-                                flutterApi.onToken(token) { result ->
-                                    // Handle result if needed
-                                }
-                            }
+                        mainHandler.post {
+                            flutterApi.onToken(token) { }
                         }
                     }
                 }
 
-                if (!isStopping.get()) {
-                    scope.launch {
-                        withContext(Dispatchers.Main) {
-                            flutterApi.onDone { result ->
-                                // Handle result if needed
-                            }
-                        }
-                    }
-                }
-
-                withContext(Dispatchers.Main) {
+                // ALWAYS deliver a terminal event — suppressing onDone after
+                // stop() left the Dart stream open forever and the controller
+                // stuck in "Already generating".
+                mainHandler.post {
+                    flutterApi.onDone { }
                     callback(Result.success(Unit))
                 }
             } catch (e: Exception) {
-                if (!isStopping.get()) {
-                    scope.launch {
-                        withContext(Dispatchers.Main) {
-                            flutterApi.onError(e.message ?: "Generation failed") { result ->
-                                // Handle result if needed
-                            }
-                            callback(Result.failure(e))
-                        }
+                mainHandler.post {
+                    if (isStopping.get()) {
+                        // Intentional cancellation — terminal done, not error.
+                        flutterApi.onDone { }
+                        callback(Result.success(Unit))
+                    } else {
+                        flutterApi.onError(e.message ?: "Generation failed") { }
+                        callback(Result.failure(e))
                     }
                 }
             }
@@ -171,6 +175,11 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi {
         scope.launch {
             try {
                 stop { }
+                // Wait for the generation coroutine to exit the native call
+                // before freeing the model — nativeFreeModel() during a
+                // running llama_decode is a use-after-free crash. Bounded so
+                // a hung native call can't wedge dispose forever.
+                withTimeoutOrNull(10_000) { generationJob?.join() }
                 if (isModelLoaded.get()) {
                     nativeFreeModel()
                     isModelLoaded.set(false)
@@ -222,38 +231,28 @@ class LlamaFlutterAndroidPlugin : FlutterPlugin, LlamaHostApi {
                     request.penalizeNewline
                 ) { token ->
                     if (!isStopping.get()) {
-                        scope.launch {
-                            withContext(Dispatchers.Main) {
-                                flutterApi.onToken(token) { result ->
-                                    // Handle result if needed
-                                }
-                            }
+                        mainHandler.post {
+                            flutterApi.onToken(token) { }
                         }
                     }
                 }
 
-                if (!isStopping.get()) {
-                    scope.launch {
-                        withContext(Dispatchers.Main) {
-                            flutterApi.onDone { result ->
-                                // Handle result if needed
-                            }
-                        }
-                    }
-                }
-
-                withContext(Dispatchers.Main) {
+                // ALWAYS deliver a terminal event — suppressing onDone after
+                // stop() left the Dart stream open forever and the controller
+                // stuck in "Already generating".
+                mainHandler.post {
+                    flutterApi.onDone { }
                     callback(Result.success(Unit))
                 }
             } catch (e: Exception) {
-                if (!isStopping.get()) {
-                    scope.launch {
-                        withContext(Dispatchers.Main) {
-                            flutterApi.onError(e.message ?: "Generation failed") { result ->
-                                // Handle result if needed
-                            }
-                            callback(Result.failure(e))
-                        }
+                mainHandler.post {
+                    if (isStopping.get()) {
+                        // Intentional cancellation — terminal done, not error.
+                        flutterApi.onDone { }
+                        callback(Result.success(Unit))
+                    } else {
+                        flutterApi.onError(e.message ?: "Generation failed") { }
+                        callback(Result.failure(e))
                     }
                 }
             }
