@@ -12,6 +12,12 @@ SIMPLE_CONTEXT_COMPLETE.md
 SIMPLE_FINAL.md
 README_REPO.md
 CONTEXT.md
+readme_branch.md
+
+# Dev-only artifacts (stray zip, build/error logs)
+llama.zip
+example_build.log
+logs/
 
 # Example build artifacts
 example/build/
