@@ -145,7 +145,82 @@ static std::string sanitizeUTF8(const char* str, size_t len) {
         
         i += num_bytes;
     }
-    
+
+    return result;
+}
+
+// Streaming token-by-token generation hands this function one llama.cpp
+// token's raw bytes at a time, but a single multi-byte UTF-8 character (e.g.
+// any CJK character, which is 3 bytes in UTF-8) is frequently split across
+// two or more consecutive tokens by the BPE tokenizer — tokenizer merges are
+// based on training-corpus byte statistics, not Unicode character
+// boundaries. sanitizeUTF8() above treats each token's bytes in total
+// isolation: when it sees a multi-byte sequence that looks valid but isn't
+// complete *within that one token*, it replaces it with U+FFFD and discards
+// the bytes — which corrupts every multi-byte character that happens to
+// straddle a token boundary, not just genuinely malformed output. This
+// mirrors llama.cpp's own server (`common/common.cpp`'s `validate_utf8`,
+// used by `tools/server/server.cpp`) faces the identical problem — it also
+// must emit discrete, complete strings per streamed chunk — and solves it
+// the same way: buffer whatever's incomplete and prepend it next time,
+// rather than deciding per-chunk in isolation.
+//
+// `pending` persists across calls for one `generate()`/`generateChat()`
+// invocation (the caller owns it, declared once before the token loop).
+// Returns the longest complete, valid prefix found so far; anything left
+// over that still looks like the start of a not-yet-complete multi-byte
+// sequence is left in `pending` for the next token's bytes to complete,
+// instead of being discarded. Only a byte sequence that is definitively
+// invalid (not just incomplete) is replaced with U+FFFD immediately.
+static std::string drainCompleteUTF8(std::string& pending, const char* new_bytes, size_t new_len) {
+    if (new_len > 0) pending.append(new_bytes, new_len);
+
+    const unsigned char* bytes = reinterpret_cast<const unsigned char*>(pending.data());
+    const size_t len = pending.size();
+    std::string result;
+    result.reserve(len);
+    size_t i = 0;
+
+    while (i < len) {
+        unsigned char c = bytes[i];
+
+        if ((c & 0x80) == 0) {
+            result += static_cast<char>(c);
+            i++;
+            continue;
+        }
+
+        int num_bytes;
+        if ((c & 0xE0) == 0xC0) {
+            num_bytes = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            num_bytes = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            num_bytes = 4;
+        } else {
+            // Not a valid UTF-8 leading byte at all — this is genuinely
+            // invalid, not merely incomplete, so there's nothing to wait
+            // for. Replace it and move on.
+            result += "\xEF\xBF\xBD";
+            i++;
+            continue;
+        }
+
+        if (i + num_bytes > len) {
+            // Not enough bytes yet to tell — likely a character split
+            // across a token boundary. Keep this (and only this trailing
+            // tail; everything before it was already consumed above) for
+            // next call instead of discarding it.
+            pending.assign(reinterpret_cast<const char*>(bytes + i), len - i);
+            return result;
+        }
+
+        std::string seq(reinterpret_cast<const char*>(bytes + i), num_bytes);
+        result += isValidUTF8(seq.c_str(), num_bytes) ? seq : "\xEF\xBF\xBD";
+        i += num_bytes;
+    }
+
+    pending.clear();
     return result;
 }
 
@@ -512,6 +587,10 @@ Java_com_write4me_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGenera
 
     // Generation loop
     LOGI("Starting generation loop: max_tokens=%lld", max_tokens);
+    // Holds any trailing bytes from a multi-byte UTF-8 character that this
+    // token didn't complete — see drainCompleteUTF8() above. Scoped to this
+    // one generate() call, since g_n_past/the KV cache are reset per call.
+    std::string pending_utf8;
     for (int i = 0; i < max_tokens && !g_stop_flag; i++) {
         // Sample next token
         LOGI("Sampling token %d, g_n_past=%d", i + 1, g_n_past);
@@ -527,14 +606,8 @@ Java_com_write4me_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGenera
         // Decode token to string
         char buffer[256];
         int32_t length = llama_token_to_piece(g_vocab, new_token_id, buffer, sizeof(buffer), 0, true);
-        std::string piece;
-        
-        if (length > 0) {
-            piece = sanitizeUTF8(buffer, length);
-        } else {
-            piece = "";
-        }
-        
+        std::string piece = drainCompleteUTF8(pending_utf8, buffer, length > 0 ? length : 0);
+
         // Call Kotlin callback
         jstring token_str = env->NewStringUTF(piece.c_str());
         env->CallObjectMethod(g_token_callback, invokeMethod, token_str);
@@ -553,11 +626,24 @@ Java_com_write4me_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeGenera
             LOGE("Failed to decode after sampling token %d", i + 1);
             break;
         }
-        
+
         // Update position counter after each generated token
         g_n_past++;
     }
     LOGI("Generation loop finished.");
+
+    // Generation ending with bytes still pending means it was truncated
+    // exactly mid-character (e.g. a max_tokens cutoff) — no further token
+    // will ever arrive to complete it, so this is the one case where
+    // falling back to the old immediate-replacement behavior is correct.
+    if (!pending_utf8.empty()) {
+        std::string leftover = sanitizeUTF8(pending_utf8.c_str(), pending_utf8.size());
+        if (!leftover.empty()) {
+            jstring token_str = env->NewStringUTF(leftover.c_str());
+            env->CallObjectMethod(g_token_callback, invokeMethod, token_str);
+            env->DeleteLocalRef(token_str);
+        }
+    }
 
     if (g_token_callback != nullptr) {
         env->DeleteGlobalRef(g_token_callback);

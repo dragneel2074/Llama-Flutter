@@ -1,3 +1,25 @@
+## Unreleased
+
+### Fixed
+- **CJK (and any multi-byte-UTF-8) characters garbled during streaming
+  generation**: `llama_token_to_piece()` returns one token's raw bytes at a
+  time, but BPE tokenizer merges are based on training-corpus byte
+  statistics, not Unicode character boundaries — a single multi-byte
+  character (e.g. any CJK character, 3 bytes in UTF-8) is routinely split
+  across two or more consecutive tokens. `sanitizeUTF8()` validated each
+  token's bytes in total isolation: when a sequence looked like the valid
+  start of a multi-byte character but wasn't complete *within that one
+  token*, it replaced it with U+FFFD and discarded the bytes — corrupting
+  every multi-byte character that happened to straddle a token boundary,
+  not just genuinely malformed output. The streaming generation loop now
+  buffers an in-progress multi-byte sequence across token callbacks
+  (`drainCompleteUTF8()`) and only emits/replaces once a full character is
+  available or is proven genuinely invalid — the same approach llama.cpp's
+  own server (`common/common.cpp`'s `validate_utf8()`) uses for the
+  identical discrete-chunk-boundary problem. Verified on-device translating
+  Japanese text with a real model (dozens of generations, zero mojibake)
+  where the bug was previously reproducible on nearly every response.
+
 ## 0.2.6 (July 20, 2026)
 
 ### Fixed
